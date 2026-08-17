@@ -11,13 +11,16 @@ from jaxtyping import Float, Int
 from nanomanifold import SO3
 from trimesh import Trimesh
 
-from mannequin import _constants as constants
+from mannequin import _identity as identity_ops
 from mannequin import _io as io
 from mannequin import _rigid as rigid
-from mannequin import identity as identity_ops
 
 Array = Any
 MannequinLod = Literal[0, 1, 2]
+
+# source row in [*body_pose rows, zero, zero] for each mannequin actuated body
+# slot; the two zero rows stand in for SMPL-X joints the mannequin adds rigidly
+SMPLX_BODY_ORDER = (0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11, 14, 12, 15, 17, 19, 21, 13, 16, 18, 20, 22)
 
 
 class SmplxMannequin:
@@ -36,7 +39,7 @@ class SmplxMannequin:
     def __init__(self, *, lod: MannequinLod = 0) -> None:
         self._weights = io.load(lod)
         self._identity_template = identity_ops.build_template(self._weights)
-        self._calibration: io.ShapeCalibration | None = None
+        self._calibration = io.load_calibration()
 
     # ------------------------------------------------------------- structure
     @property
@@ -84,15 +87,12 @@ class SmplxMannequin:
         skip_vertices: bool = False,
     ) -> identity_ops.SmplxMannequinIdentity:
         """Prepare one reusable, length-only identity from an unbatched beta vector."""
-        del expression
-        shape_np = np.asarray(shape)
-        if np.any(shape_np) and self._calibration is None:
-            self._calibration = io.load_calibration()
+        del expression  # the mannequin has no expression response
         return identity_ops.prepare(
             self._weights,
             self._identity_template,
             self._calibration,
-            shape_np,
+            np.asarray(shape),
             skip_vertices=skip_vertices,
         )
 
@@ -112,32 +112,23 @@ class SmplxMannequin:
         """Compute shape-adjusted mannequin joint transforms."""
         identity = self._resolve_identity(identity, shape, expression, skip_vertices=True)
         root_translation = identity["local_joint_offsets"][0]
+        rotation = None
         if global_rotation is not None:
             rotation = SO3.convert(global_rotation, src="axis_angle", dst="rotmat", xp=np)
             root_translation = np.squeeze(rotation @ root_translation[..., None], axis=-1)
         if global_translation is not None:
             root_translation = root_translation + global_translation
         if pelvis_rotation is not None:
-            if global_rotation is None:
-                global_rotation = pelvis_rotation
-            else:
-                global_rotation = SO3.convert(
-                    SO3.multiply(
-                        SO3.convert(global_rotation, src="axis_angle", dst="quat", xp=np),
-                        SO3.convert(pelvis_rotation, src="axis_angle", dst="quat", xp=np),
-                        xp=np,
-                    ),
-                    src="quat",
-                    dst="axis_angle",
-                    xp=np,
-                )
+            # the pelvis point is invariant under its own rotation, so pelvis
+            # rotation folds into the global rotation without moving the root
+            pelvis = SO3.convert(pelvis_rotation, src="axis_angle", dst="rotmat", xp=np)
+            rotation = pelvis if rotation is None else rotation @ pelvis
         return rigid.forward_skeleton_from_local_rotations(
             self._local_rotations_from_smplx(body_pose, hand_pose),
             local_offsets=identity["local_joint_offsets"],
-            rest_local_rotations=self._weights.rest_local_rotations,
             actuated_joint_indices=self._weights.actuated_joint_indices,
             parents=self._weights.parents,
-            global_rotation=global_rotation,
+            global_rotation=rotation,
             global_translation=root_translation,
         )
 
@@ -169,13 +160,9 @@ class SmplxMannequin:
 
     def forward_links(self, *args: Any, **kwargs: Any) -> Float[Array, "*batch L 4 4"]:
         """Compute link transforms from SMPL-X parameters."""
+        # geometry is joint-local, so a link transform is its owning joint's
         skeleton = self.forward_skeleton(*args, **kwargs)
-        return rigid.forward_link_transforms(
-            skeleton,
-            self._weights.link_joint_indices,
-            self._weights.link_geom_positions,
-            self._weights.link_geom_rotations,
-        )
+        return skeleton[..., self._weights.link_joint_indices, :, :]
 
     def forward_meshes(self, *args: Any, **kwargs: Any) -> list[Trimesh]:
         """Build one posed mannequin mesh per batch element."""
@@ -209,7 +196,7 @@ class SmplxMannequin:
         }
         params = {name: np.zeros((*batch_dims, *shape), dtype=dtype) for name, shape in shapes.items()}
         if hands != "default":
-            hand_pose = np.asarray(getattr(self._load_calibration(), f"hand_{hands}"), dtype=dtype)
+            hand_pose = np.asarray(getattr(self._calibration, f"hand_{hands}"), dtype=dtype)
             params["hand_pose"] = np.broadcast_to(hand_pose, (*batch_dims, *hand_pose.shape)).copy()
         return params
 
@@ -222,16 +209,11 @@ class SmplxMannequin:
     ) -> dict[str, Float[Array, "..."]]:
         """Return the SMPL-X A-pose."""
         params = self.get_rest_pose(batch_dims=batch_dims, dtype=dtype, hands=hands)
-        body_pose = np.asarray(self._load_calibration().body_a_pose, dtype=params["body_pose"].dtype)
+        body_pose = np.asarray(self._calibration.body_a_pose, dtype=params["body_pose"].dtype)
         params["body_pose"] = np.broadcast_to(body_pose, (*batch_dims, *body_pose.shape)).copy()
         return params
 
     # -------------------------------------------------------------- internals
-    def _load_calibration(self) -> io.ShapeCalibration:
-        if self._calibration is None:
-            self._calibration = io.load_calibration()
-        return self._calibration
-
     def _local_rotations_from_smplx(
         self,
         body_pose: Float[Array, "*batch 21 3"],
@@ -243,10 +225,7 @@ class SmplxMannequin:
             raise ValueError(f"hand_pose must have shape [..., 30, 3], got {tuple(hand_pose.shape)}")
         padding = np.zeros((*body_pose.shape[:-2], 2, 3), dtype=body_pose.dtype)
         padded_body_pose = np.concatenate((body_pose, padding), axis=-2)
-        ordered_body_pose = np.stack(
-            [padded_body_pose[..., index, :] for index in constants.SMPLX_BODY_ORDER],
-            axis=-2,
-        )
+        ordered_body_pose = np.take(padded_body_pose, SMPLX_BODY_ORDER, axis=-2)
         axis_angle = np.concatenate((ordered_body_pose, hand_pose), axis=-2)
         return SO3.convert(axis_angle, src="axis_angle", dst="rotmat", xp=np)
 

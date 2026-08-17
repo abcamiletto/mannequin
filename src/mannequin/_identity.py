@@ -24,42 +24,29 @@ class SmplxMannequinIdentity(TypedDict):
 
 @dataclass(frozen=True)
 class IdentityTemplate:
-    local_offsets: np.ndarray
+    """Neutral-shape quantities reused by every :func:`prepare` call."""
+
     rest_joints: np.ndarray
-    link_local_vertices: np.ndarray
     joint_geom_anchors: tuple[int, ...]
 
 
 def build_template(weights: io.MannequinWeights) -> IdentityTemplate:
-    """Convert the neutral asset geometry into its owning joints' frames."""
     rest_joints = _joints_from_offsets(weights.local_offsets, weights.parents)
-    local_vertices = np.empty_like(weights.vertices)
+    # ball parts follow their owning joint, except the shoulder balls which are
+    # owned by the collar links but must track the shoulder joints
     anchors = list(weights.link_joint_indices)
-
-    for link, (start, count) in enumerate(zip(weights.link_vertex_starts, weights.link_vertex_counts, strict=True)):
-        vertices = weights.vertices[start : start + count]
-        rotation = weights.link_geom_rotations[link]
-        position = weights.link_geom_positions[link]
-        local_vertices[start : start + count] = vertices @ rotation.T + position
-
-        name = weights.link_names[link]
+    for link, name in enumerate(weights.link_names):
         if "shoulder_ball_L" in name:
             anchors[link] = weights.joint_names.index("L_Shoulder")
         elif "shoulder_ball_R" in name:
             anchors[link] = weights.joint_names.index("R_Shoulder")
-
-    return IdentityTemplate(
-        local_offsets=np.asarray(weights.local_offsets),
-        rest_joints=rest_joints,
-        link_local_vertices=local_vertices,
-        joint_geom_anchors=tuple(anchors),
-    )
+    return IdentityTemplate(rest_joints=rest_joints, joint_geom_anchors=tuple(anchors))
 
 
 def prepare(
     weights: io.MannequinWeights,
     template: IdentityTemplate,
-    calibration: io.ShapeCalibration | None,
+    calibration: io.ShapeCalibration,
     shape: np.ndarray,
     *,
     skip_vertices: bool,
@@ -69,13 +56,11 @@ def prepare(
     if shape.ndim != 1:
         raise ValueError(f"shape must have shape [S], got {shape.shape}.")
 
-    local_offsets = template.local_offsets.copy()
+    local_offsets = weights.local_offsets.copy()
     if np.any(shape):
-        if calibration is None:
-            calibration = io.load_calibration()
         shaped_joints = (calibration.joint_rest + calibration.joint_dirs @ shape).astype(local_offsets.dtype)
         measured_offsets = _offsets_from_joints(shaped_joints, weights.parents)
-        local_offsets = _symmetric_length_offsets(template.local_offsets, measured_offsets, weights.joint_names)
+        local_offsets = _symmetric_length_offsets(weights.local_offsets, measured_offsets, weights.joint_names)
         rest_joints = _joints_from_offsets(local_offsets, weights.parents)
         _, mannequin_vertices = _shape_vertices(weights, template, local_offsets, rest_joints)
         smplx_floor = (calibration.sole_y_rest + calibration.sole_y_dirs @ shape).min()
@@ -144,7 +129,7 @@ def _shape_vertices(
     local_offsets: np.ndarray,
     rest_joints: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
-    transforms = _joint_transforms(template.local_offsets, local_offsets, weights.parents)
+    transforms = _joint_transforms(weights.local_offsets, local_offsets, weights.parents)
     local_parts = []
     rest_parts = []
     for link, (owner, start, count, name) in enumerate(
@@ -156,7 +141,7 @@ def _shape_vertices(
             strict=True,
         )
     ):
-        vertices = template.link_local_vertices[start : start + count]
+        vertices = weights.vertices[start : start + count]
         if "__joint_" in name:
             anchor = template.joint_geom_anchors[link]
             neutral_anchor = template.rest_joints[anchor] - template.rest_joints[owner]

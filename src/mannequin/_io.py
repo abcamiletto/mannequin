@@ -43,7 +43,6 @@ class MannequinWeights:
     joint_names: list[str]
     parents: list[int]
     local_offsets: Float[Array, "J 3"]
-    rest_local_rotations: Float[Array, "J 3 3"]
     vertices: Float[Array, "V 3"]
     faces: Int[Array, "F 3"]
     link_joint_indices: list[int]
@@ -51,8 +50,6 @@ class MannequinWeights:
     link_vertex_counts: list[int]
     link_face_starts: list[int]
     link_face_counts: list[int]
-    link_geom_positions: Float[Array, "L 3"]
-    link_geom_rotations: Float[Array, "L 3 3"]
     link_names: list[str]
     actuated_joint_indices: list[int]
 
@@ -64,11 +61,19 @@ def load(lod: int = 0, *, dtype=np.float32) -> MannequinWeights:
 
     resource = files("mannequin") / "assets" / f"lod{lod}.npz"
     with resource.open("rb") as archive, np.load(archive, allow_pickle=False) as data:
+        # the runtime assumes joint-local geometry: vertices are stored in their
+        # owning joint's frame and joints carry no rest rotation
+        joint_local = (
+            np.allclose(data["rest_local_rotations"], np.eye(3), atol=1e-6)
+            and np.allclose(data["link_geom_positions"], 0.0, atol=1e-9)
+            and np.allclose(data["link_geom_rotations"], np.eye(3), atol=1e-9)
+        )
+        if not joint_local:
+            raise ValueError(f"lod{lod}.npz geometry is not joint-local; rebuild the asset")
         return MannequinWeights(
             joint_names=data["joint_names"].tolist(),
             parents=data["parents"].tolist(),
             local_offsets=data["local_offsets"].astype(dtype),
-            rest_local_rotations=data["rest_local_rotations"].astype(dtype),
             vertices=data["vertices"].astype(dtype),
             faces=data["faces"].astype(np.int64),
             link_joint_indices=data["link_joint_indices"].tolist(),
@@ -76,8 +81,6 @@ def load(lod: int = 0, *, dtype=np.float32) -> MannequinWeights:
             link_vertex_counts=data["link_vertex_counts"].tolist(),
             link_face_starts=data["link_face_starts"].tolist(),
             link_face_counts=data["link_face_counts"].tolist(),
-            link_geom_positions=data["link_geom_positions"].astype(dtype),
-            link_geom_rotations=data["link_geom_rotations"].astype(dtype),
             link_names=data["link_names"].tolist(),
             actuated_joint_indices=data["actuated_joint_indices"].tolist(),
         )

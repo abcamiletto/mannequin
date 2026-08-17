@@ -31,9 +31,9 @@ class StubScene:
     def add_frame(self, name, show_axes=False):
         return StubHandle(name)
 
-    def add_mesh_simple(self, name, vertices, faces, color, flat_shading, wxyz, position):
+    def add_mesh_simple(self, name, vertices, faces, color, flat_shading):
         self.mesh_adds += 1
-        return StubHandle(name, wxyz=wxyz, position=position)
+        return StubHandle(name)
 
 
 @pytest.fixture(scope="module")
@@ -42,17 +42,14 @@ def model():
 
 
 def assert_links_match(handle, model, **forward_kwargs):
-    """Frame transform composed with the static mesh offset must equal forward_links."""
+    """Each link's joint frame must carry exactly the forward_links transform."""
     expected = np.asarray(model.forward_links(**forward_kwargs))
     frame_by_joint = dict(zip(handle._frame_joints, handle._frames, strict=True))
-    for index, link in enumerate(handle._links):
+    for index in range(len(handle._links)):
         frame = frame_by_joint[model._weights.link_joint_indices[index]]
-        frame_rot = SO3.conversions.from_quat_to_rotmat(np.asarray(frame.wxyz), convention="wxyz", xp=np)
-        link_rot = SO3.conversions.from_quat_to_rotmat(np.asarray(link.wxyz), convention="wxyz", xp=np)
-        rotation = frame_rot @ link_rot
-        position = np.asarray(frame.position) + frame_rot @ np.asarray(link.position)
+        rotation = SO3.conversions.from_quat_to_rotmat(np.asarray(frame.wxyz), convention="wxyz", xp=np)
         np.testing.assert_allclose(rotation, expected[index, :3, :3], atol=1e-5, rtol=0)
-        np.testing.assert_allclose(position, expected[index, :3, 3], atol=1e-5, rtol=0)
+        np.testing.assert_allclose(frame.position, expected[index, :3, 3], atol=1e-5, rtol=0)
 
 
 def test_meshes_added_once_and_pose_updates_move_frames(model):

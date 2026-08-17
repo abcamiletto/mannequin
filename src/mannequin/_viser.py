@@ -1,10 +1,9 @@
 """Viser integration for the rigid mannequin.
 
 The mannequin has no skinning, so geometry is uploaded to the scene exactly
-once: each link mesh sits under its owning joint's frame with a static local
-offset, and pose updates only move the per-joint frame transforms (two
-messages per joint instead of two per mesh, so a full pose fits in a single
-viser message window).
+once: each link mesh sits under its owning joint's frame, and pose updates
+only move the per-joint frame transforms (two messages per joint instead of
+two per mesh, so a full pose fits in a single viser message window).
 """
 
 from __future__ import annotations
@@ -183,8 +182,6 @@ def add_mannequin(
                 faces=np.asarray(mesh.faces),
                 color=joint_color if "__joint_" in link_name else armor_color,
                 flat_shading=flat_shading,
-                wxyz=SO3.conversions.from_rotmat_to_quat(weights.link_geom_rotations[link], convention="wxyz", xp=np),
-                position=weights.link_geom_positions[link],
             )
         )
     handle = ViserMannequinHandle(model, pose, root_frame, frames, frame_joints, links)
