@@ -1,6 +1,6 @@
 [project]
 name = "mannequin-x"
-version = "0.0.1"
+version = "0.0.2"
 description = "Rigid, non-skinned mannequins driven directly by SMPL-X motion"
 readme = "README.md"
 authors = [
