@@ -53,6 +53,16 @@ per-frame parameter dicts work directly (`shape` is routed to `set_shape`,
 [`renders/palettes.jpg`](renders/palettes.jpg)) or a custom
 `(armor, joint)` RGB pair.
 
+## three.js
+
+`authoring/export_glb.py` exports a rigged GLB (one per LOD, attached to
+GitHub releases): joint nodes nested in the skeleton hierarchy with meshes
+parented underneath, so posing is plain local quaternions on named nodes —
+no skinning. The SMPL-X parameter-to-joint mapping ships in the root node's
+glTF extras (`userData.smplx_order` after loading). See
+[`examples/threejs.html`](examples/threejs.html) for a complete animated
+example.
+
 ## Assets
 
 Three exactly mirrored levels of detail are bundled: `lod=0` (~40k vertices),

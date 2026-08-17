@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- Serve this directory (e.g. `python -m http.server`) and open the page. -->
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <title>mannequin-x — three.js</title>
+    <style>
+      body { margin: 0; }
+    </style>
+  </head>
+  <body>
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+          "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+        }
+      }
+    </script>
+    <script type="module">
+      import * as THREE from "three";
+      import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+      import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
+
+      const renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      document.body.appendChild(renderer.domElement);
+
+      const scene = new THREE.Scene();
+      scene.background = new THREE.Color(0xe8e6e2);
+      scene.add(new THREE.HemisphereLight(0xffffff, 0x777777, 2.2));
+      const sun = new THREE.DirectionalLight(0xffffff, 2.0);
+      sun.position.set(2, 4, 3);
+      scene.add(sun);
+
+      const camera = new THREE.PerspectiveCamera(40, window.innerWidth / window.innerHeight, 0.1, 100);
+      camera.position.set(1.6, 0.3, 2.6);
+      const controls = new OrbitControls(camera, renderer.domElement);
+      controls.target.set(0, -0.3, 0);
+
+      const gltf = await new GLTFLoader().loadAsync("./mannequin.glb");
+      const mannequin = gltf.scene.getObjectByName("mannequin");
+      scene.add(mannequin);
+
+      // stand on a grid: the GLB uses SMPL-X native coordinates (pelvis-centric)
+      const feet = new THREE.Box3().setFromObject(mannequin).min.y;
+      scene.add(new THREE.GridHelper(4, 20, 0xaaaaaa, 0xcccccc).translateY(feet));
+
+      // `smplx_order` (from the glTF extras) lists which joint node each SMPL-X
+      // pose row drives, so full parameter arrays apply directly:
+      const order = mannequin.userData.smplx_order;
+      const axisAngle = new THREE.Vector3();
+      function setPose(name, pose) {
+        order[name].forEach((jointName, row) => {
+          if (jointName === null) return; // jaw/eye rows: no mannequin joint
+          axisAngle.fromArray(pose, row * 3);
+          const angle = axisAngle.length();
+          mannequin
+            .getObjectByName(jointName)
+            .quaternion.setFromAxisAngle(angle > 0 ? axisAngle.divideScalar(angle) : axisAngle, angle);
+        });
+      }
+
+      const bodyPose = new Float32Array(21 * 3);
+      function animate(ms) {
+        const t = ms / 1000;
+        const swing = 0.5 * Math.sin(t * 1.7);
+        bodyPose[order.body_pose.indexOf("L_Shoulder") * 3 + 2] = -0.9 - swing; // z
+        bodyPose[order.body_pose.indexOf("R_Shoulder") * 3 + 2] = 0.9 - swing;
+        bodyPose[order.body_pose.indexOf("L_Elbow") * 3 + 1] = -0.6 + swing; // y
+        bodyPose[order.body_pose.indexOf("Head") * 3 + 1] = 0.4 * Math.sin(t * 0.9);
+        setPose("body_pose", bodyPose);
+
+        // joint nodes are also directly addressable:
+        mannequin.getObjectByName("L_Wrist").quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), swing);
+
+        controls.update();
+        renderer.render(scene, camera);
+        requestAnimationFrame(animate);
+      }
+      requestAnimationFrame(animate);
+    </script>
+  </body>
+</html>
