@@ -32,14 +32,18 @@ class IdentityTemplate:
 
 def build_template(weights: io.MannequinWeights) -> IdentityTemplate:
     rest_joints = _joints_from_offsets(weights.local_offsets, weights.parents)
-    # ball parts follow their owning joint, except the shoulder balls which are
-    # owned by the collar links but must track the shoulder joints
+    # ball parts follow their owning joint, except balls that sit on a child
+    # joint of their owner: shoulder balls (owned by the collars) and knuckle
+    # balls (owned by the parent-side finger segment)
     anchors = list(weights.link_joint_indices)
     for link, name in enumerate(weights.link_names):
         if "shoulder_ball_L" in name:
             anchors[link] = weights.joint_names.index("L_Shoulder")
         elif "shoulder_ball_R" in name:
             anchors[link] = weights.joint_names.index("R_Shoulder")
+        elif "_knuckle" in name:
+            finger, knuckle, side = name.split("__")[1].split("_")
+            anchors[link] = weights.joint_names.index(f"{side}_{finger.capitalize()}{knuckle[-1]}")
     return IdentityTemplate(rest_joints=rest_joints, joint_geom_anchors=tuple(anchors))
 
 

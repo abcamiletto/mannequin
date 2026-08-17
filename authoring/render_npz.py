@@ -13,7 +13,7 @@ argv = sys.argv[sys.argv.index("--") + 1 :]
 NPZ_PATH, OUT_DIR, PREFIX = argv[0], argv[1], argv[2]
 
 ARMOR_COLOR = (0.68, 0.48, 0.24, 1.0)
-JOINT_COLOR = (0.52, 0.34, 0.16, 1.0)
+JOINT_COLOR = (0.16, 0.09, 0.05, 1.0)
 STUDIO_COLOR = (0.34, 0.32, 0.29, 1.0)
 
 

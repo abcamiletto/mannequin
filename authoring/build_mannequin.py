@@ -26,6 +26,7 @@ ARMOR_BUDGET = {0: 24292, 1: 9712, 2: 2740}
 HEAD_SHARE_CAP = 0.30
 ALLOC_POWER = 0.8
 HEAD_SMOOTH_ITERS = 320  # Taubin passes that turn the SMPL-X face into a soft mannequin face
+EGG_BLEND = 0.55  # blend of the smoothed skull toward its bounding ellipsoid (0 = full face)
 
 # torso blocks, thighs, shins, forearms, and feet keep the original
 # hand-authored design; geometry is copied verbatim from the pre-polish
@@ -228,10 +229,14 @@ PLANE_CUTS = {
 }
 
 # ------------------------------------------------------- build region meshes
+FINGERS = ("index", "middle", "pinky", "ring", "thumb")
+
 part_faces = {}
 for name in region_names:
     if name == "neck" or name.endswith("_R"):
         continue
+    if any(name.startswith(finger) and name[len(finger)].isdigit() for finger in FINGERS):
+        continue  # finger segments become capsules, not carved shells
     rid = region_names.index(name)
     if face_mode(name):
         faces = F[face_assign == rid]
@@ -255,52 +260,200 @@ for name in region_names:
         raise RuntimeError(f"region {name} degenerate: {len(faces)} faces")
     part_faces[name] = faces
 
-# split distal finger regions into distal + fingertip sub-parts
-finals = {}
-for name, faces in part_faces.items():
-    m = None
-    for finger in ("index", "middle", "pinky", "ring", "thumb"):
-        if name.startswith(f"{finger}3_"):
-            m = finger
-    if m is None:
-        finals[name] = faces
-        continue
-    side = name[-1]
-    jpos = J[S[f"{side}_{m.capitalize()}3"]]
-    vids = np.unique(faces)
-    axisv = V[vids] - jpos
-    tip = V[vids[np.linalg.norm(axisv, axis=1).argmax()]]
-    axis = (tip - jpos) / np.linalg.norm(tip - jpos)
-    t = (V[:, :] - jpos) @ axis / np.linalg.norm(tip - jpos)
-    thresh = 0.55
-    tipmask = (t[faces] > thresh).all(axis=1)
-    while tipmask.sum() < 12 and thresh > 0.35:
-        thresh -= 0.05
-        tipmask = (t[faces] > thresh).all(axis=1)
-    tip = max(components(faces[tipmask]), key=len)
-    dist = max(components(faces[~tipmask]), key=len)
-    finals[f"{m}_fingertip_{side}"] = tip
-    finals[f"{m}_distal_{side}"] = dist
-
 # rename to the NPZ part vocabulary
 RENAME = {"pelvis": "pelvis_shell", "abdomen": "abdomen_shell", "chest": "chest_shell", "head": "mannequin_head"}
-for finger in ("index", "middle", "pinky", "ring", "thumb"):
-    for side in ("L", "R"):
-        RENAME[f"{finger}1_{side}"] = f"{finger}_proximal_{side}"
-        RENAME[f"{finger}2_{side}"] = f"{finger}_middle_{side}"
-part_faces = {RENAME.get(k, k): v for k, v in finals.items() if RENAME.get(k, k) not in RESTORE_OLD}
+part_faces = {RENAME.get(k, k): v for k, v in part_faces.items() if RENAME.get(k, k) not in RESTORE_OLD}
+
+# ------------------------------------------------- finger capsules (L side)
+# Each phalanx is a capsule with end caps centered on its joints. A knuckle
+# ball sits on every finger joint (elbow-style), slightly proud of the
+# segments, and boolean-carves a clearance cup into both abutting capsules —
+# and into the palm at the base knuckles — so the parts nest with a visible
+# groove and stay closed when bent. The distal capsule runs joint3 ->
+# fingertip, absorbing the old fingertip part.
+CAPSULE_RADIUS_SCALE = 0.84
+KNUCKLE_BALL_SCALE = 1.28  # ball radius vs the parent-side segment radius: proud like the elbow balls
+KNUCKLE_MAX_FRACTION = 0.30  # cap ball radius vs the shorter adjacent segment, so short segments survive
+KNUCKLE_CLEARANCE = 0.0018  # visible air gap between ball and the carved segment cups
+CAPSULE_TIP_KEEP = 0.55  # rounded-end fraction kept outside the carve: only the tip gets dished
+MIN_SEGMENT_LENGTH = 0.004  # never shorten a capsule below this cylinder length
+
+
+def capsule_mesh(p0, p1, radius, segments=14, rings=5):
+    """Closed capsule with hemispherical end caps centered on p0 and p1."""
+    axis = p1 - p0
+    length = np.linalg.norm(axis)
+    axis = axis / length
+    ortho = np.array([1.0, 0.0, 0.0]) if abs(axis[1]) > 0.9 else np.array([0.0, 1.0, 0.0])
+    x = np.cross(ortho, axis)
+    x /= np.linalg.norm(x)
+    y = np.cross(axis, x)
+
+    phi_bottom = np.linspace(-np.pi / 2, 0.0, rings + 1)[1:]
+    phi_top = np.linspace(0.0, np.pi / 2, rings + 1)[:-1]
+    ring_specs = [(np.sin(p) * radius, np.cos(p) * radius) for p in phi_bottom]
+    ring_specs += [(length + np.sin(p) * radius, np.cos(p) * radius) for p in phi_top]
+
+    angles = np.linspace(0.0, 2 * np.pi, segments, endpoint=False)
+    circle = np.stack([np.cos(angles), np.sin(angles)], axis=1)
+    verts = [p0 - axis * radius]
+    for offset, ring_radius in ring_specs:
+        center = p0 + axis * offset
+        verts.extend(center + ring_radius * (cx * x + cy * y) for cx, cy in circle)
+    verts.append(p1 + axis * radius)
+
+    faces = [[0, 1 + (i + 1) % segments, 1 + i] for i in range(segments)]
+    for ring in range(len(ring_specs) - 1):
+        a = 1 + ring * segments
+        b = a + segments
+        for i in range(segments):
+            j = (i + 1) % segments
+            faces.append([a + i, a + j, b + j, b + i])
+    tip = len(verts) - 1
+    base = 1 + (len(ring_specs) - 1) * segments
+    faces.extend([tip, base + i, base + (i + 1) % segments] for i in range(segments))
+    return np.array(verts), faces
+
+
+def sphere_mesh(center, radius, segments=16, rings=8):
+    phis = np.linspace(-np.pi / 2, np.pi / 2, rings + 1)[1:-1]
+    angles = np.linspace(0.0, 2 * np.pi, segments, endpoint=False)
+    verts = [center - np.array([0.0, radius, 0.0])]
+    for phi in phis:
+        ring_radius = np.cos(phi) * radius
+        for a in angles:
+            verts.append(center + np.array([np.cos(a) * ring_radius, np.sin(phi) * radius, np.sin(a) * ring_radius]))
+    verts.append(center + np.array([0.0, radius, 0.0]))
+
+    faces = [[0, 1 + (i + 1) % segments, 1 + i] for i in range(segments)]
+    for ring in range(len(phis) - 1):
+        a = 1 + ring * segments
+        b = a + segments
+        for i in range(segments):
+            j = (i + 1) % segments
+            faces.append([a + i, a + j, b + j, b + i])
+    top = len(verts) - 1
+    base = 1 + (len(phis) - 1) * segments
+    faces.extend([top, base + i, base + (i + 1) % segments] for i in range(segments))
+    return np.array(verts), faces
+
+
+def build_finger_parts():
+    """Capsule segments, knuckle balls, boolean cutter spheres, and carve map."""
+    capsules, knuckles, cutters = {}, {}, {}
+    carves = defaultdict(list)
+    for finger in FINGERS:
+        joint = finger.capitalize()
+        j = [J[S[f"L_{joint}{seg}"]] for seg in (1, 2, 3)]
+        seg_vids = [np.unique(F[face_assign == region_names.index(f"{finger}{seg}_L")]) for seg in (1, 2, 3)]
+        tip = V[seg_vids[2][np.linalg.norm(V[seg_vids[2]] - j[2], axis=1).argmax()]]
+        ends = [j[0], j[1], j[2], tip]
+
+        radii = []
+        for seg in range(3):
+            axis = (ends[seg + 1] - ends[seg]) / np.linalg.norm(ends[seg + 1] - ends[seg])
+            rel = V[seg_vids[seg]] - ends[seg]
+            radial = rel - np.outer(rel @ axis, axis)
+            radii.append(np.median(np.linalg.norm(radial, axis=1)) * CAPSULE_RADIUS_SCALE)
+
+        lengths = [np.linalg.norm(ends[seg + 1] - ends[seg]) for seg in range(3)]
+        ball_radii = {}
+        for seg in (1, 2, 3):
+            adjacent = lengths[seg - 1] if seg == 1 else min(lengths[seg - 2], lengths[seg - 1])
+            ball_radii[seg] = min(KNUCKLE_BALL_SCALE * radii[seg - 1], KNUCKLE_MAX_FRACTION * adjacent)
+            knuckles[f"{finger}_knuckle{seg}_L"] = (j[seg - 1], ball_radii[seg])
+            cutters[f"{finger}{seg}"] = (j[seg - 1], ball_radii[seg] + KNUCKLE_CLEARANCE)
+
+        for seg, part in enumerate(("proximal", "middle", "distal")):
+            p0, p1 = ends[seg], ends[seg + 1]
+            axis = (p1 - p0) / np.linalg.norm(p1 - p0)
+            if part == "distal":
+                p1 = p1 - axis * radii[seg] * 1.5  # stop short of the skin tip
+            # pull the rounded ends back from the knuckle balls so the balls sit
+            # in open air and the carve only dishes the very tip of the capsule
+            pull_start = ball_radii[seg + 1] + KNUCKLE_CLEARANCE + CAPSULE_TIP_KEEP * radii[seg]
+            pull_end = (
+                0.0 if part == "distal" else ball_radii[seg + 2] + KNUCKLE_CLEARANCE + CAPSULE_TIP_KEEP * radii[seg]
+            )
+            raw = np.linalg.norm(p1 - p0)
+            scale = min(1.0, (raw - MIN_SEGMENT_LENGTH) / (pull_start + pull_end))
+            p0 = p0 + axis * pull_start * scale
+            p1 = p1 - axis * pull_end * scale
+            capsules[f"{finger}_{part}_L"] = capsule_mesh(p0, p1, radii[seg])
+        carves[f"{finger}_proximal_L"] = [f"{finger}1", f"{finger}2"]
+        carves[f"{finger}_middle_L"] = [f"{finger}2", f"{finger}3"]
+        carves[f"{finger}_distal_L"] = [f"{finger}3"]
+        carves["palm_L"].append(f"{finger}1")
+    return capsules, knuckles, cutters, carves
+
+
+FINGER_CAPSULES, FINGER_KNUCKLES, FINGER_CUTTERS, FINGER_CARVES = build_finger_parts()
+
+# carve the palm around the existing wrist ball with the same air gap the
+# hand-authored forearm keeps on its side of the ball
+_orig0 = np.load(f"{ORIG}/lod0.npz", allow_pickle=False)
+_o_names = _orig0["link_names"].tolist()
+_o_offsets = _orig0["local_offsets"].astype(np.float64)
+_o_joints = np.zeros_like(_o_offsets)
+_o_joints[0] = _o_offsets[0]
+for _j in range(1, len(_orig0["parents"])):
+    _o_joints[_j] = _o_joints[_orig0["parents"][_j]] + _o_offsets[_j]
+
+
+def _orig_link_world(idx):
+    s, c = int(_orig0["link_vertex_starts"][idx]), int(_orig0["link_vertex_counts"][idx])
+    return _orig0["vertices"][s : s + c].astype(np.float64) + _o_joints[int(_orig0["link_joint_indices"][idx])]
+
+
+_ball = _orig_link_world(next(i for i, n in enumerate(_o_names) if "__wrist_ball_L__" in n))
+_wrist_center = (_ball.min(0) + _ball.max(0)) / 2
+_wrist_radius = np.linalg.norm(_ball - _wrist_center, axis=1).mean()
+_forearm = _orig_link_world(next(i for i, n in enumerate(_o_names) if "__forearm_L__" in n))
+_wrist_gap = np.linalg.norm(_forearm - _wrist_center, axis=1).min() - _wrist_radius
+FINGER_CUTTERS["wrist"] = (_wrist_center, _wrist_radius + _wrist_gap)
+FINGER_CARVES["palm_L"].append("wrist")
 
 # ---------------------------------------------------- Blender part processing
 bpy.ops.wm.read_factory_settings(use_empty=True)
 scene = bpy.context.scene
 depsgraph_objects = {}
 
+part_geoms = {}
 for name, faces in part_faces.items():
     vids = np.unique(faces)
     remap = -np.ones(len(V), np.int64)
     remap[vids] = np.arange(len(vids))
-    verts = V[vids]
-    fl = remap[faces]
+    part_geoms[name] = (V[vids].copy(), remap[faces].tolist())
+part_geoms.update(FINGER_CAPSULES)
+
+
+def make_cutter(name, center, radius):
+    cverts, cfaces = sphere_mesh(center, radius, segments=24, rings=12)
+    cmesh = bpy.data.meshes.new(name)
+    cmesh.from_pydata(cverts.tolist(), [], cfaces)
+    cmesh.validate()
+    # outward normals are required: the boolean silently no-ops on an
+    # inside-out cutter volume
+    cbm = bmesh.new()
+    cbm.from_mesh(cmesh)
+    bmesh.ops.recalc_face_normals(cbm, faces=cbm.faces)
+    cbm.to_mesh(cmesh)
+    cbm.free()
+    cutter = bpy.data.objects.new(name, cmesh)
+    scene.collection.objects.link(cutter)
+    return cutter
+
+
+cutter_objects = {}
+recut_objects = {}
+for key, (center, radius) in FINGER_CUTTERS.items():
+    cutter_objects[key] = make_cutter(f"cut_{key}", center, radius)
+    # recut cutters are slightly inflated: cutting twice with the same sphere
+    # hits coincident surfaces and the exact solver destroys the mesh, and a
+    # too-small inflation leaves serrated slivers along the old rim
+    recut_objects[key] = make_cutter(f"recut_{key}", center, radius + 0.0005)
+
+for name, (verts, fl) in part_geoms.items():
     if name == "upper_arm_L":
         # stretch the proximal cone (erosion shortened it by a face ring) so
         # its rounded cap reaches the shoulder ball; the distal half is fixed
@@ -318,7 +471,7 @@ for name, faces in part_faces.items():
         round_end(verts, 1, Y_SHIN_CUT, 0.14, [0, 2], ANKLE_BALL_XZ, SHIN_MOUTH_R)
 
     mesh = bpy.data.meshes.new(name)
-    mesh.from_pydata(verts.tolist(), [], fl.tolist())
+    mesh.from_pydata(verts.tolist(), [], fl)
     mesh.validate()
     bm = bmesh.new()
     bm.from_mesh(mesh)
@@ -438,6 +591,19 @@ for name, faces in part_faces.items():
                     moved = coords + factor * (lap - coords)
                     moved[pin] = coords[pin]
                     coords = moved
+            if EGG_BLEND > 0.0:
+                # blend the skull toward its bounding ellipsoid; the ramp keeps
+                # the neck stub and jaw base untouched
+                y = coords[:, 1]
+                t = EGG_BLEND * np.clip((y - 0.20) / 0.06, 0.0, 1.0)
+                t[pin] = 0.0
+                dome = coords[y > 0.20]
+                center = (dome.min(0) + dome.max(0)) / 2
+                radii = (dome.max(0) - dome.min(0)) / 2
+                q = (coords - center) / radii
+                norm = np.linalg.norm(q, axis=1, keepdims=True)
+                proj = center + radii * q / np.maximum(norm, 1e-9)
+                coords = coords * (1 - t[:, None]) + proj * t[:, None]
             for i, v in enumerate(bm.verts):
                 v.co = coords[i]
     bmesh.ops.recalc_face_normals(bm, faces=bm.faces)
@@ -458,6 +624,20 @@ for name, faces in part_faces.items():
     else:
         sub = obj.modifiers.new("sub", "SUBSURF")
         sub.levels = sub.render_levels = 1
+    for key in FINGER_CARVES.get(name, ()):
+        cut = obj.modifiers.new(f"cut_{key}", "BOOLEAN")
+        cut.operation = "DIFFERENCE"
+        cut.object = cutter_objects[key]
+    if name == "palm_L":
+        # soften the edgy carve rims, then carve again so the smoothing cannot
+        # push material back into the clearance gaps
+        smo = obj.modifiers.new("smo", "SMOOTH")
+        smo.factor = 0.5
+        smo.iterations = 10
+        for key in FINGER_CARVES[name]:
+            cut = obj.modifiers.new(f"recut_{key}", "BOOLEAN")
+            cut.operation = "DIFFERENCE"
+            cut.object = recut_objects[key]
     dec = obj.modifiers.new("dec", "DECIMATE")
     dec.ratio = 1.0
     dec.use_collapse_triangulate = True
@@ -527,6 +707,25 @@ for lod, budget in ARMOR_BUDGET.items():
     total = sum(len(v) * mult[n] for n, (v, f) in arrays.items())
     print(f"LOD{lod}: armor total {total} (budget {budget})")
 
+# knuckle balls bypass the subsurf/decimate pipeline: they stay exact analytic
+# spheres, generated per LOD at a matching resolution
+KNUCKLE_LOD_RES = {0: (16, 8), 1: (12, 6), 2: (8, 4)}
+
+
+def triangulated(faces):
+    tris = []
+    for face in faces:
+        tris.append(list(face[:3]))
+        if len(face) == 4:
+            tris.append([face[0], face[2], face[3]])
+    return np.array(tris, np.int64)
+
+
+for lod, (segments, rings) in KNUCKLE_LOD_RES.items():
+    for name, (center, radius) in FINGER_KNUCKLES.items():
+        verts, faces = sphere_mesh(center, radius, segments=segments, rings=rings)
+        lod_arrays[lod][name] = (verts, triangulated(faces))
+
 
 # ------------------------------------------------------------- NPZ assembly
 def mirror(varr, farr):
@@ -550,10 +749,15 @@ for lod in (0, 1, 2):
     ostarts, ocounts = old["link_vertex_starts"], old["link_vertex_counts"]
     ofstarts, ofcounts = old["link_face_starts"], old["link_face_counts"]
 
-    new_names, vparts, fparts = [], [], []
+    new_names, new_owners, vparts, fparts = [], [], [], []
     vstart = 0
     starts, counts, fstarts, fcounts = [], [], [], []
     for link, lname in enumerate(names):
+        if "_fingertip_" in lname:
+            continue  # fingertips are absorbed into the distal capsules
+        part = lname.split("__")[1]
+        if "_bearing_" in part and part.split("_")[0] in FINGERS:
+            continue  # the old finger bearings are replaced by the knuckle balls
         owner = int(owners[link])
         joint_name = lname.split("__")[0]
         middle = lname.split("__")[1]
@@ -573,6 +777,7 @@ for lod in (0, 1, 2):
                 vw, f = lod_arrays[lod][key]
             v = vw - joints[owner]  # world -> joint-local
             new_names.append(f"{joint_name}__{key}__armor_{suffix}")
+        new_owners.append(owner)
         starts.append(vstart)
         counts.append(len(v))
         fstarts.append(sum(fcounts))
@@ -581,7 +786,32 @@ for lod in (0, 1, 2):
         fparts.append(f + vstart)
         vstart += len(v)
 
-    L = len(names)
+    # knuckle balls: new joint links owned by the parent-side segment's joint
+    jnames = old["joint_names"].tolist()
+    knuckle_id = 200
+    for finger in FINGERS:
+        joint = finger.capitalize()
+        for seg in (1, 2, 3):
+            lv, lf = lod_arrays[lod][f"{finger}_knuckle{seg}_L"]
+            for side in ("L", "R"):
+                vw, f = (lv, lf) if side == "L" else mirror(lv, lf)
+                owner_name = f"{side}_Hand" if seg == 1 else f"{side}_{joint}{seg - 1}"
+                owner = jnames.index(owner_name)
+                new_names.append(
+                    f"{owner_name}_J{owner}__{finger}_knuckle{seg}_{side}__joint_{knuckle_id}_{knuckle_id}"
+                )
+                new_owners.append(owner)
+                v = vw.astype(np.float64) - joints[owner]
+                starts.append(vstart)
+                counts.append(len(v))
+                fstarts.append(sum(fcounts))
+                fcounts.append(len(f))
+                vparts.append(v)
+                fparts.append(f + vstart)
+                vstart += len(v)
+                knuckle_id += 1
+
+    L = len(new_names)
     np.savez_compressed(
         f"{OUT}/lod{lod}.npz",
         joint_names=old["joint_names"],
@@ -590,7 +820,7 @@ for lod in (0, 1, 2):
         rest_local_rotations=old["rest_local_rotations"],
         vertices=np.concatenate(vparts).astype(np.float32),
         faces=np.concatenate(fparts).astype(np.int64),
-        link_joint_indices=old["link_joint_indices"],
+        link_joint_indices=np.array(new_owners, dtype=old["link_joint_indices"].dtype),
         link_vertex_starts=np.array(starts, np.int64),
         link_vertex_counts=np.array(counts, np.int64),
         link_face_starts=np.array(fstarts, np.int64),
