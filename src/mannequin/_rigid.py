@@ -5,8 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-from jaxtyping import Float, Int
-from trimesh import Trimesh
+from jaxtyping import Float
 
 Array = Any
 
@@ -60,28 +59,3 @@ def forward_skeleton_from_local_rotations(
         trans = trans + global_translation[..., None, :]
 
     return affine_transforms(rot, trans)
-
-
-def link_meshes(
-    vertices: Float[Array, "V 3"],
-    faces: Int[Array, "F 3"],
-    link_vertex_starts: list[int],
-    link_vertex_counts: list[int],
-    link_face_starts: list[int],
-    link_face_counts: list[int],
-) -> list[Trimesh]:
-    """Build one link-local mesh per packed geometry range."""
-    vertices = np.asarray(vertices)
-    faces = np.asarray(faces)
-    meshes = []
-    for vertex_start, vertex_count, face_start, face_count in zip(
-        link_vertex_starts,
-        link_vertex_counts,
-        link_face_starts,
-        link_face_counts,
-        strict=True,
-    ):
-        link_vertices = vertices[vertex_start : vertex_start + vertex_count]
-        link_faces = faces[face_start : face_start + face_count] - vertex_start
-        meshes.append(Trimesh(vertices=link_vertices, faces=link_faces, process=False))
-    return meshes

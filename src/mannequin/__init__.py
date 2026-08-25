@@ -1,6 +1,6 @@
-"""Rigid, non-skinned mannequin driven directly by SMPL-X motion."""
+"""Rigid and skinned mannequins driven by SMPL-X motion."""
 
-from mannequin._model import SmplxMannequin
-from mannequin._viser import PALETTES, ViserMannequinHandle, add_mannequin
+from mannequin._model import Kind, Mannequin, Pose
+from mannequin._viser import PALETTES, Palette, PaletteName, SceneHandle, add_to_scene
 
-__all__ = ["PALETTES", "SmplxMannequin", "ViserMannequinHandle", "add_mannequin"]
+__all__ = ["PALETTES", "Kind", "Mannequin", "Palette", "PaletteName", "Pose", "SceneHandle", "add_to_scene"]

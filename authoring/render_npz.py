@@ -36,7 +36,27 @@ for j in range(1, len(parents)):
 
 verts = data["vertices"].astype(np.float64)
 faces = data["faces"]
-names = data["link_names"].tolist()
+skinned = "skin_weights" in data.files
+if skinned:
+    skin_joints = data["skin_joint_indices"]
+    skin_weights = data["skin_weights"]
+    source_joints = data["skin_source_joint_positions"]
+    rest = np.sum(
+        (verts[:, None, :] - source_joints[skin_joints] + joints[skin_joints]) * skin_weights[..., None], axis=1
+    )
+    rest += data["skin_root_offset"]
+    world_vertices = np.stack([rest[:, 0], -rest[:, 2], rest[:, 1]], axis=1)
+    names = data["skin_part_names"].tolist()
+    vertex_starts = data["skin_part_vertex_starts"]
+    vertex_counts = data["skin_part_vertex_counts"]
+    face_starts = data["skin_part_face_starts"]
+    face_counts = data["skin_part_face_counts"]
+else:
+    names = data["link_names"].tolist()
+    vertex_starts = data["link_vertex_starts"]
+    vertex_counts = data["link_vertex_counts"]
+    face_starts = data["link_face_starts"]
+    face_counts = data["link_face_counts"]
 
 
 def make_material(name, color, rough):
@@ -53,16 +73,19 @@ mat_joint = make_material("Joints", JOINT_COLOR, 0.38)
 mat_studio = make_material("Studio", STUDIO_COLOR, 0.78)
 
 for link, name in enumerate(names):
-    o = int(data["link_joint_indices"][link])
-    vs, vc = int(data["link_vertex_starts"][link]), int(data["link_vertex_counts"][link])
-    fs, fc = int(data["link_face_starts"][link]), int(data["link_face_counts"][link])
-    world = verts[vs : vs + vc] + joints[o]
-    world = np.stack([world[:, 0], -world[:, 2], world[:, 1]], axis=1)
+    vs, vc = int(vertex_starts[link]), int(vertex_counts[link])
+    fs, fc = int(face_starts[link]), int(face_counts[link])
+    if skinned:
+        world = world_vertices[vs : vs + vc]
+    else:
+        owner = int(data["link_joint_indices"][link])
+        world = verts[vs : vs + vc] + joints[owner]
+        world = np.stack([world[:, 0], -world[:, 2], world[:, 1]], axis=1)
     f = faces[fs : fs + fc] - vs
     mesh = bpy.data.meshes.new(name)
     mesh.from_pydata(world.tolist(), [], f.tolist())
     mesh.validate()
-    mesh.materials.append(mat_joint if "__joint_" in name else mat_armor)
+    mesh.materials.append(mat_joint if name.startswith("joint_") or "__joint_" in name else mat_armor)
     mesh.shade_smooth()
     if hasattr(mesh, "set_sharp_from_angle"):
         mesh.set_sharp_from_angle(angle=0.9)
@@ -83,15 +106,19 @@ center = (mn + mx) / 2
 height = mx[2] - mn[2]
 
 # head bounds (highest armor part)
-head_obj = next(o for o in scene.objects if "head" in o.name)
-hmn = np.array([1e9] * 3)
-hmx = -hmn.copy()
-for c in head_obj.bound_box:
-    w = np.array(head_obj.matrix_world @ Vector(c))
-    hmn = np.minimum(hmn, w)
-    hmx = np.maximum(hmx, w)
-hcenter = (hmn + hmx) / 2
-hsize = (hmx - hmn).max()
+head_obj = next((o for o in scene.objects if "head" in o.name), None)
+if head_obj is None:
+    hsize = height * 0.16
+    hcenter = np.asarray((center[0], center[1], mx[2] - hsize * 0.5))
+else:
+    hmn = np.array([1e9] * 3)
+    hmx = -hmn.copy()
+    for c in head_obj.bound_box:
+        w = np.array(head_obj.matrix_world @ Vector(c))
+        hmn = np.minimum(hmn, w)
+        hmx = np.maximum(hmx, w)
+    hcenter = (hmn + hmx) / 2
+    hsize = (hmx - hmn).max()
 
 # ---- studio ----
 bpy.ops.mesh.primitive_plane_add(size=30, location=(0, 0, mn[2] - 0.001))
@@ -182,11 +209,16 @@ scene.render.engine = "CYCLES"
 scene.cycles.samples = 128
 scene.cycles.use_denoising = True
 prefs = bpy.context.preferences.addons["cycles"].preferences
-prefs.compute_device_type = "OPTIX"
+for backend in ("OPTIX", "CUDA", "METAL", "HIP", "ONEAPI"):
+    try:
+        prefs.compute_device_type = backend
+        break
+    except TypeError:
+        continue
 prefs.get_devices()
 gpu_found = False
 for dev in prefs.devices:
-    dev.use = dev.type in {"OPTIX", "CUDA"}
+    dev.use = dev.type != "CPU"
     gpu_found = gpu_found or dev.use
 scene.cycles.device = "GPU" if gpu_found else "CPU"
 print("RENDER DEVICE:", scene.cycles.device)
