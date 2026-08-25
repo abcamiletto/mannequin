@@ -1,72 +1,111 @@
 # SMPL-X Mannequin
 
-A rigid mannequin driven directly by SMPL-X parameters — no skinning, no
-blend shapes. Every part, down to the fingers, is a rigid mesh owned by one
-SMPL-X joint; shape coefficients change bone lengths without changing part
-thickness. Numpy-only and fully standalone: the SMPL-X shape response is
-baked into a small bundled table, so neither `body-models` nor the SMPL-X
-model files are needed.
+`mannequin-x` provides two lightweight figures driven by SMPL-X body and hand
+rotations:
+
+- `armor` is the repo's segmented rigid mannequin, available in three LODs.
+- `wooden` is a skinned wooden mannequin at its source resolution.
+
+Both designs accept the same `Pose`. Ten SMPL-X shape coefficients resize their
+bones and geometry. The NumPy runtime includes the required shape calibration,
+so it does not need SMPL-X model files.
 
 ```bash
 pip install mannequin-x
 ```
 
-## Usage
+## Python API
 
 ```python
-from mannequin import SmplxMannequin
+import numpy as np
 
-model = SmplxMannequin(lod=1)
-params = model.get_rest_pose()
-vertices = model.forward_vertices(**params)
+from mannequin import Mannequin
+
+shape = np.zeros(10, dtype=np.float32)
+shape[0] = 1.5
+
+model = Mannequin("wooden", shape=shape)
+pose = model.rest_pose()
+pose.body[17, 2] = 0.8
+
+vertices = model.vertices(pose)
+faces = model.faces
+joint_transforms = model.joint_transforms(pose)
 ```
 
-`forward_vertices`, `forward_skeleton`, `forward_links`, and `forward_meshes`
-take SMPL-X parameters (axis-angle, optionally batched) and use the native
-SMPL-X origin: identical parameters place the pelvis and neutral foot surface
-in the same coordinates as SMPL-X. For repeated calls with the same betas,
-prepare the identity once with `prepare_identity` and pass it as `identity=`.
+Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
+2. The wooden model has one resolution, so it does not accept `lod`.
+
+`rest_pose()` returns a mutable `Pose` with four arrays:
+
+- `body`: `[..., 21, 3]` SMPL-X body rotations
+- `hands`: `[..., 30, 3]` left and right hand rotations
+- `root_rotation`: `[..., 3]` world rotation
+- `translation`: `[..., 3]` world translation
+
+Rotations use axis-angle vectors. Leading batch dimensions are supported.
+Jaw, eye, and expression parameters are absent because neither mannequin has
+matching geometry or joints.
+
+Shape is identity state, not motion state. Set it at construction or call
+`model.reshape(shape)`. Pose evaluation then stays concise:
+
+```python
+model.reshape(new_shape)
+vertices = model.vertices(pose)
+links = model.link_transforms(pose)
+```
 
 ## Viser
 
-Each link mesh is uploaded to the [viser](https://viser.studio) scene once,
-parented to its joint's frame; pose and shape updates only send the per-joint
-frame transforms (~10 KB per full pose).
+Install the optional viewer dependency with `pip install mannequin-x[viser]`.
 
 ```python
 import viser
-from mannequin import SmplxMannequin, add_mannequin
+
+from mannequin import Mannequin, add_to_scene
 
 server = viser.ViserServer()
-model = SmplxMannequin(lod=1)
-handle = add_mannequin(server.scene, "/mannequin", model)
-handle.set_shape(betas)
-handle.set_pose(**model.get_apose())
+model = Mannequin("wooden")
+handle = add_to_scene(server.scene, "/mannequin", model)
+
+handle.set_pose(model.rest_pose())
+handle.set_position((1.0, 0.0, 0.0))
+handle.set_shape(new_shape)
+handle.set_palette("sage")
 ```
 
-`set_pose` accepts any subset of the SMPL-X pose parameters, and full
-per-frame parameter dicts work directly (`shape` is routed to `set_shape`,
-`expression` is ignored). Unchanged values are skipped.
+Pass one of `sand`, `ivory`, `charcoal`, `sage`, `clay`, `slate`, or `wood` to
+`add_to_scene(..., palette=...)` or `handle.set_palette(...)`.
+Wooden meshes use Viser's native `add_mesh_skinned()`, so pose updates send
+bone transforms instead of vertex buffers.
 
-`add_mannequin` takes a `palette` — one of the built-in armor/joint pairs in
-`PALETTES` (`sand`, `ivory`, `charcoal`, `sage`, `clay`, `slate`; see
-[`renders/palettes.jpg`](renders/palettes.jpg)) or a custom
-`(armor, joint)` RGB pair.
+Run the live comparison against a local neutral SMPL-X model:
+
+```bash
+uv run python examples/compare.py /path/to/SMPLX_NEUTRAL.npz
+```
+
+The viewer shows armor, wooden, and full SMPL-X figures with matched motion,
+random hand poses, shape controls, front and side views, a T-pose button, and a
+shared palette. The SMPL-X file remains external to the package.
 
 ## three.js
 
-`authoring/export_glb.py` exports a rigged GLB (one per LOD, attached to
-GitHub releases): joint nodes nested in the skeleton hierarchy with meshes
-parented underneath, so posing is plain local quaternions on named nodes —
-no skinning. The SMPL-X parameter-to-joint mapping ships in the root node's
-glTF extras (`userData.smplx_order` after loading). See
-[`examples/threejs.html`](examples/threejs.html) for a complete animated
-example.
+`authoring/export_glb.py` exports rigid armor as a nested GLB joint hierarchy.
+The root extras contain the SMPL-X body and hand parameter mapping. See
+[`examples/threejs.html`](examples/threejs.html).
 
 ## Assets
 
-Three exactly mirrored levels of detail are bundled: `lod=0` (~40k vertices),
-`lod=1` (~15k), and `lod=2` (<5k). Lower-leg length is calibrated against the
-SMPL-X sole vertices, so shaped identities keep the same ground plane. The
-editable source is [`authoring/mannequin.blend`](authoring/mannequin.blend);
-the installed package ships only the compact numpy assets.
+The editable armor source is [`authoring/mannequin.blend`](authoring/mannequin.blend).
+
+`src/mannequin/assets/wooden.npz` retains its source vertices and skin weights,
+converts coordinates, triangulates faces, and maps 52 source bones onto this
+package's joint hierarchy. Rebuild it with `authoring/import_wooden.py`.
+
+`authoring/bake_calibration.py` uses the NumPy SMPL-X implementation from
+`body-models` to bake the joint, ground-plane, head, and height response for the
+first ten shape coefficients. Pass it a local `SMPLX_NEUTRAL.npz`; the runtime
+does not depend on `body-models` or the SMPL-X file. The wooden torso keeps its
+source proportions.

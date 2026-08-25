@@ -65,11 +65,11 @@
       function animate(ms) {
         const t = ms / 1000;
         const swing = 0.5 * Math.sin(t * 1.7);
-        bodyPose[order.body_pose.indexOf("L_Shoulder") * 3 + 2] = -0.9 - swing; // z
-        bodyPose[order.body_pose.indexOf("R_Shoulder") * 3 + 2] = 0.9 - swing;
-        bodyPose[order.body_pose.indexOf("L_Elbow") * 3 + 1] = -0.6 + swing; // y
-        bodyPose[order.body_pose.indexOf("Head") * 3 + 1] = 0.4 * Math.sin(t * 0.9);
-        setPose("body_pose", bodyPose);
+        bodyPose[order.body.indexOf("L_Shoulder") * 3 + 2] = -0.9 - swing; // z
+        bodyPose[order.body.indexOf("R_Shoulder") * 3 + 2] = 0.9 - swing;
+        bodyPose[order.body.indexOf("L_Elbow") * 3 + 1] = -0.6 + swing; // y
+        bodyPose[order.body.indexOf("Head") * 3 + 1] = 0.4 * Math.sin(t * 0.9);
+        setPose("body", bodyPose);
 
         // joint nodes are also directly addressable:
         mannequin.getObjectByName("L_Wrist").quaternion.setFromAxisAngle(new THREE.Vector3(1, 0, 0), swing);
