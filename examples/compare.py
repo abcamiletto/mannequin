@@ -58,6 +58,7 @@ class SmplxHandle:
                 self._pose.hands,
                 identity=self._identity,
                 global_rotation=self._pose.root_rotation,
+                pelvis_rotation=self._pose.pelvis_rotation,
                 global_translation=self._pose.translation,
             ),
             dtype=np.float32,
