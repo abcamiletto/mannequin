@@ -31,6 +31,7 @@ class Pose:
     body: Float[Array, "*batch 21 3"]
     hands: Float[Array, "*batch 30 3"]
     root_rotation: Float[Array, "*batch 3"]
+    pelvis_rotation: Float[Array, "*batch 3"]
     translation: Float[Array, "*batch 3"]
 
     def copy(self) -> Pose:
@@ -38,6 +39,7 @@ class Pose:
             body=np.asarray(self.body).copy(),
             hands=np.asarray(self.hands).copy(),
             root_rotation=np.asarray(self.root_rotation).copy(),
+            pelvis_rotation=np.asarray(self.pelvis_rotation).copy(),
             translation=np.asarray(self.translation).copy(),
         )
 
@@ -120,6 +122,7 @@ class Mannequin:
             body=np.zeros((*batch_shape, BODY_JOINTS, 3), dtype=dtype),
             hands=np.zeros((*batch_shape, HAND_JOINTS, 3), dtype=dtype),
             root_rotation=np.zeros((*batch_shape, 3), dtype=dtype),
+            pelvis_rotation=np.zeros((*batch_shape, 3), dtype=dtype),
             translation=np.zeros((*batch_shape, 3), dtype=dtype),
         )
 
@@ -136,6 +139,7 @@ class Mannequin:
     def _joint_transforms(self, pose: Pose, local_offsets: np.ndarray) -> np.ndarray:
         rotations = self._local_rotations(pose)
         root_rotation = SO3.convert(pose.root_rotation, src="axis_angle", dst="rotmat", xp=np)
+        pelvis_rotation = SO3.convert(pose.pelvis_rotation, src="axis_angle", dst="rotmat", xp=np)
         root_offset = local_offsets[0]
         root_translation = np.squeeze(root_rotation @ root_offset[..., None], axis=-1) + pose.translation
         return _rigid.forward_skeleton_from_local_rotations(
@@ -143,7 +147,7 @@ class Mannequin:
             local_offsets=local_offsets,
             actuated_joint_indices=self._weights.actuated_joint_indices,
             parents=self._weights.parents,
-            global_rotation=root_rotation,
+            global_rotation=root_rotation @ pelvis_rotation,
             global_translation=root_translation,
         )
 

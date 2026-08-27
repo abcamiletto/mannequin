@@ -36,13 +36,16 @@ joint_transforms = model.joint_transforms(pose)
 Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
 2. The wooden model has one resolution, so it does not accept `lod`.
 
-`rest_pose()` returns a mutable `Pose` with four arrays:
+`rest_pose()` returns a mutable `Pose` with five arrays:
 
 - `body`: `[..., 21, 3]` SMPL-X body rotations
 - `hands`: `[..., 30, 3]` left and right hand rotations
 - `root_rotation`: `[..., 3]` world rotation
+- `pelvis_rotation`: `[..., 3]` pelvis rotation about the pelvis joint
 - `translation`: `[..., 3]` world translation
 
+`root_rotation` rotates the whole figure around the SMPL-X origin.
+`pelvis_rotation` rotates the body around the pelvis without moving the pelvis.
 Rotations use axis-angle vectors. Leading batch dimensions are supported.
 Jaw, eye, and expression parameters are absent because neither mannequin has
 matching geometry or joints.
