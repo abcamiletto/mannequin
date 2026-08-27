@@ -194,9 +194,39 @@ class Mannequin:
         head_min = self._calibration.head_min_rest + self._calibration.head_min_dirs @ self._shape
         head_max = self._calibration.head_max_rest + self._calibration.head_max_dirs @ self._shape
         vertices = self._fit_skin_region(vertices, ("Head",), head_min, head_max)
-        identity["skin_vertices"] = self._preserve_rigid_parts(vertices, joints, identity, root_offset)
-        identity["skin_bind_positions"] = joints[:, :3, 3] + root_offset
+        bind_positions = joints[:, :3, 3] + root_offset
+        vertices = self._preserve_rigid_parts(vertices, joints, identity, root_offset)
+        identity["skin_vertices"] = self._reshape_forefeet(vertices, bind_positions)
+        identity["skin_bind_positions"] = bind_positions
         return identity
+
+    def _reshape_forefeet(self, vertices: np.ndarray, bind_positions: np.ndarray) -> np.ndarray:
+        joint_indices = self._skin_joint_indices
+        skin_weights = self._skin_weights
+        assert joint_indices is not None and skin_weights is not None
+        result = vertices.copy()
+        angle = 0.1
+        length_scale = 1.2
+        cosine, sine = np.cos(angle), np.sin(angle)
+        for side in ("L", "R"):
+            ankle = self.joint_names.index(f"{side}_Ankle")
+            toe = self.joint_names.index(f"{side}_Toe")
+            foot_weight = np.sum(
+                np.where(np.isin(joint_indices, (ankle, toe)), skin_weights, 0.0),
+                axis=1,
+            )
+            relative = vertices - bind_positions[ankle]
+            rotated = relative.copy()
+            rotated[:, 1] = cosine * relative[:, 1] - sine * length_scale * relative[:, 2]
+            rotated[:, 2] = sine * relative[:, 1] + cosine * length_scale * relative[:, 2]
+            result += foot_weight[:, None] * (rotated - relative)
+
+            foot = foot_weight > 0.5
+            affected = foot & (foot_weight > 0.0)
+            floor = vertices[foot, 1].min()
+            shift = np.max((floor - result[affected, 1]) / foot_weight[affected])
+            result[:, 1] += foot_weight * shift
+        return result
 
     def _preserve_rigid_parts(
         self,
