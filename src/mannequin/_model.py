@@ -290,6 +290,9 @@ class Mannequin:
             self._calibration,
             self._shape,
         )
+        rest_joints = _identity._joints_from_offsets(local_offsets, self._weights.parents)
+        display_joints = _identity.symmetric_joints(rest_joints, self._weights.joint_names)
+        display_offsets = _identity._offsets_from_joints(display_joints, self._weights.parents)
         identity: _identity.Identity = {"local_joint_offsets": local_offsets}
         rotations = np.repeat(
             np.eye(3, dtype=self._weights.vertices.dtype)[None],
@@ -298,14 +301,14 @@ class Mannequin:
         )
         joints = _rigid.forward_skeleton_from_local_rotations(
             rotations[self._weights.actuated_joint_indices],
-            local_offsets=local_offsets,
+            local_offsets=display_offsets,
             actuated_joint_indices=self._weights.actuated_joint_indices,
             parents=self._weights.parents,
-            global_translation=local_offsets[0],
+            global_translation=display_offsets[0],
         )
         identity["skin_local_transforms"] = _identity.skin_shape_transforms(
             self._weights.local_offsets,
-            local_offsets,
+            display_offsets,
             self._weights.parents,
         )
         head = self._weights.joint_names.index("Head")
@@ -314,12 +317,33 @@ class Mannequin:
         head_min = self._calibration.head_min_rest + self._calibration.head_min_dirs @ self._shape
         head_max = self._calibration.head_max_rest + self._calibration.head_max_dirs @ self._shape
         vertices = self._fit_skin_region(vertices, ("Head",), head_min, head_max)
-        bind_positions = joints[:, :3, 3]
+        bind_positions = rest_joints
         vertices = self._preserve_rigid_parts(vertices, joints)
         target_floor = (self._calibration.sole_y_rest + self._calibration.sole_y_dirs @ self._shape).min()
-        identity["skin_vertices"] = self._reshape_forefeet(vertices, bind_positions, target_floor)
+        vertices = self._reshape_forefeet(vertices, bind_positions, target_floor)
+        identity["skin_vertices"] = self._symmetrize_skin_joints(vertices)
         identity["skin_bind_positions"] = bind_positions
         return identity
+
+    def _symmetrize_skin_joints(self, vertices: np.ndarray) -> np.ndarray:
+        names = self._weights.skin_part_names
+        starts = self._weights.skin_part_vertex_starts
+        counts = self._weights.skin_part_vertex_counts
+        assert names is not None and starts is not None and counts is not None
+        parts = {name: (start, count) for name, start, count in zip(names, starts, counts, strict=True)}
+        reflection = np.asarray((-1.0, 1.0, 1.0), dtype=vertices.dtype)
+        result = vertices.copy()
+        for name, (left_start, count) in parts.items():
+            if not name.startswith("joint_L"):
+                continue
+            right_start, right_count = parts[name.replace("joint_L", "joint_R")]
+            if count != right_count:
+                continue
+            left = slice(left_start, left_start + count)
+            right = slice(right_start, right_start + count)
+            result[left] = 0.5 * (vertices[left] + reflection * vertices[right])
+            result[right] = reflection * result[left]
+        return result
 
     def _reshape_forefeet(
         self,

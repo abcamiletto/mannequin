@@ -57,7 +57,15 @@ def prepare(
     """Prepare rigid geometry for one SMPL-X body shape."""
     local_offsets = prepare_skeleton(weights, calibration, shape)
     rest_joints = _joints_from_offsets(local_offsets, weights.parents)
-    local_vertices, _ = _shape_vertices(weights, template, local_offsets, rest_joints)
+    display_joints = symmetric_joints(rest_joints, weights.joint_names)
+    display_offsets = _offsets_from_joints(display_joints, weights.parents)
+    local_vertices, _ = _shape_vertices(
+        weights,
+        template,
+        display_offsets,
+        display_joints,
+        rest_joints,
+    )
     return {"local_joint_offsets": local_offsets, "link_local_vertices": local_vertices}
 
 
@@ -83,11 +91,28 @@ def _offsets_from_joints(joints: np.ndarray, parents: list[int]) -> np.ndarray:
     return offsets
 
 
+def symmetric_joints(joints: np.ndarray, joint_names: list[str]) -> np.ndarray:
+    """Mirror joint pairs around x=0 without changing their shared midpoint."""
+    result = joints.copy()
+    indices = {name: index for index, name in enumerate(joint_names)}
+    reflection = np.asarray((-1.0, 1.0, 1.0), dtype=joints.dtype)
+    for name, left in indices.items():
+        if not name.startswith("L_"):
+            if not name.startswith("R_"):
+                result[left, 0] = 0.0
+            continue
+        right = indices[f"R_{name[2:]}"]
+        result[left] = 0.5 * (joints[left] + reflection * joints[right])
+        result[right] = reflection * result[left]
+    return result
+
+
 def _shape_vertices(
     weights: io.MannequinWeights,
     template: IdentityTemplate,
     local_offsets: np.ndarray,
-    rest_joints: np.ndarray,
+    display_joints: np.ndarray,
+    kinematic_joints: np.ndarray,
 ) -> tuple[np.ndarray, np.ndarray]:
     transforms = joint_shape_transforms(weights.local_offsets, local_offsets, weights.parents)
     local_parts = []
@@ -105,14 +130,37 @@ def _shape_vertices(
         if "__joint_" in name:
             anchor = template.joint_geom_anchors[link]
             neutral_anchor = template.rest_joints[anchor] - template.rest_joints[owner]
-            shaped_anchor = rest_joints[anchor] - rest_joints[owner]
+            shaped_anchor = display_joints[anchor] - display_joints[owner]
             vertices = vertices + shaped_anchor - neutral_anchor
         else:
             vertices = vertices @ transforms[owner].T
-        local_parts.append(vertices)
-        rest_parts.append(vertices + rest_joints[owner])
-    _align_abdomen(weights, rest_joints, local_parts, rest_parts)
+        world_vertices = vertices + display_joints[owner]
+        local_parts.append(world_vertices - kinematic_joints[owner])
+        rest_parts.append(world_vertices)
+    _align_abdomen(weights, kinematic_joints, local_parts, rest_parts)
+    _symmetrize_lateral_parts(weights, rest_parts)
+    local_parts = [
+        vertices - kinematic_joints[owner]
+        for vertices, owner in zip(rest_parts, weights.link_joint_indices, strict=True)
+    ]
     return np.concatenate(local_parts), np.concatenate(rest_parts)
+
+
+def _symmetrize_lateral_parts(
+    weights: io.MannequinWeights,
+    rest_parts: list[np.ndarray],
+) -> None:
+    part_names = [name.split("__")[1] for name in weights.link_names]
+    indices = {name: index for index, name in enumerate(part_names)}
+    reflection = np.asarray((-1.0, 1.0, 1.0), dtype=weights.vertices.dtype)
+    for name, left in indices.items():
+        if "_L" not in name:
+            continue
+        right = indices.get(name.replace("_L", "_R"))
+        if right is None or rest_parts[left].shape != rest_parts[right].shape:
+            continue
+        rest_parts[left] = 0.5 * (rest_parts[left] + reflection * rest_parts[right])
+        rest_parts[right] = reflection * rest_parts[left]
 
 
 def _align_abdomen(
