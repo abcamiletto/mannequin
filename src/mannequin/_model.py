@@ -330,17 +330,13 @@ class Mannequin:
         starts = self._weights.skin_part_vertex_starts
         counts = self._weights.skin_part_vertex_counts
         assert names is not None and starts is not None and counts is not None
-        parts = {name: (start, count) for name, start, count in zip(names, starts, counts, strict=True)}
+        parts = {name: slice(start, start + count) for name, start, count in zip(names, starts, counts, strict=True)}
         reflection = np.asarray((-1.0, 1.0, 1.0), dtype=vertices.dtype)
         result = vertices.copy()
-        for name, (left_start, count) in parts.items():
+        for name, left in parts.items():
             if not name.startswith("joint_L"):
                 continue
-            right_start, right_count = parts[name.replace("joint_L", "joint_R")]
-            if count != right_count:
-                continue
-            left = slice(left_start, left_start + count)
-            right = slice(right_start, right_start + count)
+            right = parts[name.replace("joint_L", "joint_R")]
             result[left] = 0.5 * (vertices[left] + reflection * vertices[right])
             result[right] = reflection * result[left]
         return result

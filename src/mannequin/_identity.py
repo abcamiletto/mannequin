@@ -59,7 +59,7 @@ def prepare(
     rest_joints = _joints_from_offsets(local_offsets, weights.parents)
     display_joints = symmetric_joints(rest_joints, weights.joint_names)
     display_offsets = _offsets_from_joints(display_joints, weights.parents)
-    local_vertices, _ = _shape_vertices(
+    local_vertices = _shape_vertices(
         weights,
         template,
         display_offsets,
@@ -110,12 +110,11 @@ def symmetric_joints(joints: np.ndarray, joint_names: list[str]) -> np.ndarray:
 def _shape_vertices(
     weights: io.MannequinWeights,
     template: IdentityTemplate,
-    local_offsets: np.ndarray,
+    display_offsets: np.ndarray,
     display_joints: np.ndarray,
     kinematic_joints: np.ndarray,
-) -> tuple[np.ndarray, np.ndarray]:
-    transforms = joint_shape_transforms(weights.local_offsets, local_offsets, weights.parents)
-    local_parts = []
+) -> np.ndarray:
+    transforms = joint_shape_transforms(weights.local_offsets, display_offsets, weights.parents)
     rest_parts = []
     for link, (owner, start, count, name) in enumerate(
         zip(
@@ -134,16 +133,14 @@ def _shape_vertices(
             vertices = vertices + shaped_anchor - neutral_anchor
         else:
             vertices = vertices @ transforms[owner].T
-        world_vertices = vertices + display_joints[owner]
-        local_parts.append(world_vertices - kinematic_joints[owner])
-        rest_parts.append(world_vertices)
-    _align_abdomen(weights, kinematic_joints, local_parts, rest_parts)
+        rest_parts.append(vertices + display_joints[owner])
+    _align_abdomen(weights, rest_parts)
     _symmetrize_lateral_parts(weights, rest_parts)
     local_parts = [
         vertices - kinematic_joints[owner]
         for vertices, owner in zip(rest_parts, weights.link_joint_indices, strict=True)
     ]
-    return np.concatenate(local_parts), np.concatenate(rest_parts)
+    return np.concatenate(local_parts)
 
 
 def _symmetrize_lateral_parts(
@@ -156,17 +153,13 @@ def _symmetrize_lateral_parts(
     for name, left in indices.items():
         if "_L" not in name:
             continue
-        right = indices.get(name.replace("_L", "_R"))
-        if right is None or rest_parts[left].shape != rest_parts[right].shape:
-            continue
+        right = indices[name.replace("_L", "_R")]
         rest_parts[left] = 0.5 * (rest_parts[left] + reflection * rest_parts[right])
         rest_parts[right] = reflection * rest_parts[left]
 
 
 def _align_abdomen(
     weights: io.MannequinWeights,
-    rest_joints: np.ndarray,
-    local_parts: list[np.ndarray],
     rest_parts: list[np.ndarray],
 ) -> None:
     links = {
@@ -187,17 +180,13 @@ def _align_abdomen(
     )
 
     link = links["abdomen_shell"]
-    owner = weights.link_joint_indices[link]
     rest_parts[link] = abdomen
-    local_parts[link] = abdomen - rest_joints[owner]
 
 
 def joint_shape_transforms(
     neutral_offsets: np.ndarray,
     target_offsets: np.ndarray,
     parents: list[int],
-    *,
-    regularization: float = 0.0,
 ) -> np.ndarray:
     transforms = np.repeat(np.eye(3, dtype=target_offsets.dtype)[None], len(parents), axis=0)
     children = [[] for _ in parents]
@@ -209,21 +198,7 @@ def joint_shape_transforms(
         if joint_children:
             neutral_axes = neutral_offsets[joint_children].T
             target_axes = target_offsets[joint_children].T
-            if regularization > 0.0 and len(joint_children) == 1:
-                axis = neutral_axes[:, 0]
-                length = np.linalg.norm(axis)
-                target_length = np.linalg.norm(target_axes[:, 0])
-                if length > 0.0:
-                    direction = axis / length
-                    transforms[joint] += (target_length / length - 1.0) * np.outer(direction, direction)
-            elif regularization > 0.0:
-                scale = np.linalg.norm(neutral_axes, axis=0).max()
-                covariance = neutral_axes @ neutral_axes.T
-                covariance += np.eye(3, dtype=transforms.dtype) * (regularization * scale) ** 2
-                delta = target_axes - neutral_axes
-                transforms[joint] += np.linalg.solve(covariance, neutral_axes @ delta.T).T
-            else:
-                transforms[joint] += (target_axes - neutral_axes) @ np.linalg.pinv(neutral_axes)
+            transforms[joint] += (target_axes - neutral_axes) @ np.linalg.pinv(neutral_axes)
     return transforms
 
 
