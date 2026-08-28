@@ -33,6 +33,29 @@ faces = model.faces
 joint_transforms = model.joint_transforms(pose)
 ```
 
+The skeleton API also accepts the parameter dictionary returned by
+`body-models` without renaming fields:
+
+```python
+from body_models.smplx.numpy import SMPLX
+
+smplx = SMPLX(model_path="SMPLX_NEUTRAL.npz", flat_hand_mean=True)
+rest = smplx.get_rest_pose()
+
+joint_transforms = model.forward_skeleton(**rest)
+# Equivalent shorthand:
+joint_transforms = model.joint_transforms(rest)
+vertices = model.vertices(rest)
+```
+
+`forward_skeleton()` uses the `body_pose`, `head_pose`, `hand_pose`,
+`pelvis_rotation`, `shape`, `expression`, `global_rotation`, and
+`global_translation` names from `body-models`. `get_rest_pose()` returns the
+same keys. `joint_names` uses the SMPL-X names `Spine1`, `Spine2`, `Spine3`,
+`L_Foot`, `R_Foot`, `L_Collar`, and `R_Collar`. The mannequin omits the jaw and
+eye joints and adds zero-length `L_Hand` and `R_Hand` skinning joints at the
+wrists.
+
 Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
 2. The wooden model has one resolution, so it does not accept `lod`.
 
@@ -43,6 +66,9 @@ Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
 - `root_rotation`: `[..., 3]` world rotation
 - `pelvis_rotation`: `[..., 3]` pelvis rotation about the pelvis joint
 - `translation`: `[..., 3]` world translation
+
+The corresponding `body-models` aliases are available as `body_pose`,
+`hand_pose`, `global_rotation`, and `global_translation`.
 
 `root_rotation` rotates the whole figure around the SMPL-X origin.
 `pelvis_rotation` rotates the body around the pelvis without moving the pelvis.

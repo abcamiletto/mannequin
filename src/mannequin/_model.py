@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -14,11 +15,21 @@ from mannequin import _identity, _io, _rigid
 Array = Any
 Kind = Literal["armor", "wooden"]
 Lod = Literal[0, 1, 2]
+PoseParameters = Mapping[str, Array]
 
 BODY_JOINTS = 21
 HAND_JOINTS = 30
 SHAPE_COEFFICIENTS = 10
 SMPLX_BODY_ORDER = (0, 3, 6, 9, 1, 4, 7, 10, 2, 5, 8, 11, 14, 12, 15, 17, 19, 21, 13, 16, 18, 20, 22)
+SMPLX_JOINT_NAMES = {
+    "Torso": "Spine1",
+    "Spine": "Spine2",
+    "Chest": "Spine3",
+    "L_Toe": "L_Foot",
+    "R_Toe": "R_Foot",
+    "L_Thorax": "L_Collar",
+    "R_Thorax": "R_Collar",
+}
 
 
 @dataclass
@@ -42,6 +53,22 @@ class Pose:
             pelvis_rotation=np.asarray(self.pelvis_rotation).copy(),
             translation=np.asarray(self.translation).copy(),
         )
+
+    @property
+    def body_pose(self) -> Array:
+        return self.body
+
+    @property
+    def hand_pose(self) -> Array:
+        return self.hands
+
+    @property
+    def global_rotation(self) -> Array:
+        return self.root_rotation
+
+    @property
+    def global_translation(self) -> Array:
+        return self.translation
 
 
 class Mannequin:
@@ -68,7 +95,6 @@ class Mannequin:
         self._calibration = _io.load_calibration()
         if self.skinned:
             self._skeleton_weights = _io.load(2, kind="armor")
-            self._skeleton_template = _identity.build_template(self._skeleton_weights)
         self.reshape(np.zeros(SHAPE_COEFFICIENTS, np.float32) if shape is None else shape)
 
     @property
@@ -89,7 +115,7 @@ class Mannequin:
 
     @property
     def joint_names(self) -> tuple[str, ...]:
-        return tuple(self._weights.joint_names)
+        return tuple(SMPLX_JOINT_NAMES.get(name, name) for name in self._weights.joint_names)
 
     @property
     def parents(self) -> tuple[int, ...]:
@@ -102,6 +128,10 @@ class Mannequin:
     @property
     def num_vertices(self) -> int:
         return self._weights.vertices.shape[0]
+
+    def joint_index(self, joint: str) -> int:
+        """Return a joint index using body-models SMPL-X names."""
+        return self.joint_names.index(joint)
 
     def reshape(self, shape: Float[Array, "10"]) -> None:
         """Set the ten SMPL-X shape coefficients."""
@@ -126,15 +156,111 @@ class Mannequin:
             translation=np.zeros((*batch_shape, 3), dtype=dtype),
         )
 
-    def vertices(self, pose: Pose) -> Float[Array, "*batch V 3"]:
+    def get_rest_pose(
+        self,
+        *,
+        batch_dims: tuple[int, ...] = (),
+        dtype: Any | None = None,
+        hands: Literal["default", "flat", "rest"] = "default",
+    ) -> dict[str, np.ndarray]:
+        """Return rest parameters with the same keys as body-models SMPL-X."""
+        if hands not in ("default", "flat", "rest"):
+            raise ValueError(f"Invalid hands: {hands!r}")
+        dtype = np.float32 if dtype is None else dtype
+
+        def zeros(*shape: int) -> np.ndarray:
+            return np.zeros((*batch_dims, *shape), dtype=dtype)
+
+        return {
+            "shape": np.broadcast_to(self._shape, (*batch_dims, SHAPE_COEFFICIENTS)).astype(dtype, copy=True),
+            "expression": zeros(10),
+            "body_pose": zeros(BODY_JOINTS, 3),
+            "head_pose": zeros(3, 3),
+            "hand_pose": zeros(HAND_JOINTS, 3),
+            "pelvis_rotation": zeros(3),
+            "global_rotation": zeros(3),
+            "global_translation": zeros(3),
+        }
+
+    def vertices(self, pose: Pose | PoseParameters) -> Float[Array, "*batch V 3"]:
         """Return posed vertices."""
+        if not isinstance(pose, Pose):
+            shape = self._shape_from_parameters(pose.get("shape"))
+            if not np.allclose(shape, self._shape):
+                raise ValueError("Pose shape differs from the mannequin; call reshape(shape[:10]) first.")
+            pose = self._pose_from_parameters(pose)
         if self.skinned:
             return self._skin_vertices(self.joint_transforms(pose))
         return self._rigid_vertices(self.joint_transforms(pose))
 
-    def joint_transforms(self, pose: Pose) -> Float[Array, "*batch J 4 4"]:
+    def joint_transforms(self, pose: Pose | PoseParameters) -> Float[Array, "*batch J 4 4"]:
         """Return world transforms for every joint."""
+        if not isinstance(pose, Pose):
+            return self.forward_skeleton(**pose)
         return self._joint_transforms(pose, self._identity["local_joint_offsets"])
+
+    def forward_skeleton(
+        self,
+        body_pose: Array,
+        head_pose: Array,
+        hand_pose: Array,
+        *,
+        pelvis_rotation: Array | None = None,
+        shape: Array | None = None,
+        expression: Array | None = None,
+        global_rotation: Array | None = None,
+        global_translation: Array | None = None,
+        joint_indices: Sequence[int] | None = None,
+    ) -> Float[Array, "*batch J 4 4"]:
+        """Compute joints from the same arguments as body-models SMPL-X."""
+        del expression
+        head_pose = np.asarray(head_pose)
+        if head_pose.shape[-2:] != (3, 3):
+            raise ValueError(f"head_pose must end in (3, 3), got {head_pose.shape}")
+        pose = self._pose_from_parameters(
+            {
+                "body_pose": body_pose,
+                "hand_pose": hand_pose,
+                "pelvis_rotation": pelvis_rotation,
+                "global_rotation": global_rotation,
+                "global_translation": global_translation,
+            }
+        )
+        resolved_shape = self._shape_from_parameters(shape)
+        local_offsets = _identity.prepare_skeleton(
+            self._skeleton_weights if self.skinned else self._weights,
+            self._calibration,
+            resolved_shape,
+        )
+        joints = self._joint_transforms(pose, local_offsets)
+        return joints if joint_indices is None else np.take(joints, joint_indices, axis=-3)
+
+    def _pose_from_parameters(self, parameters: PoseParameters) -> Pose:
+        body = np.asarray(parameters["body_pose"])
+        batch_shape = body.shape[:-2]
+
+        def zeros() -> np.ndarray:
+            return np.zeros((*batch_shape, 3), dtype=body.dtype)
+
+        def parameter(name: str) -> Array:
+            value = parameters.get(name)
+            return zeros() if value is None else value
+
+        return Pose(
+            body=body,
+            hands=parameters["hand_pose"],
+            root_rotation=parameter("global_rotation"),
+            pelvis_rotation=parameter("pelvis_rotation"),
+            translation=parameter("global_translation"),
+        )
+
+    def _shape_from_parameters(self, shape: Array | None) -> np.ndarray:
+        if shape is None:
+            return self._shape
+        coefficients = np.asarray(shape)[..., :SHAPE_COEFFICIENTS].reshape(-1, SHAPE_COEFFICIENTS)
+        if not np.allclose(coefficients, coefficients[0]):
+            raise ValueError("Batched poses must use the same shape coefficients.")
+        return coefficients[0]
 
     def _joint_transforms(self, pose: Pose, local_offsets: np.ndarray) -> np.ndarray:
         rotations = self._local_rotations(pose)
@@ -151,7 +277,7 @@ class Mannequin:
             global_translation=root_translation,
         )
 
-    def link_transforms(self, pose: Pose) -> Float[Array, "*batch L 4 4"]:
+    def link_transforms(self, pose: Pose | PoseParameters) -> Float[Array, "*batch L 4 4"]:
         """Return world transforms for every rigid link."""
         return self.joint_transforms(pose)[..., self._weights.link_joint_indices, :, :]
 
@@ -161,10 +287,12 @@ class Mannequin:
 
         local_offsets = _identity.prepare_skeleton(
             self._skeleton_weights,
-            self._skeleton_template,
             self._calibration,
             self._shape,
         )
+        rest_joints = _identity._joints_from_offsets(local_offsets, self._weights.parents)
+        display_joints = _identity.symmetric_joints(rest_joints, self._weights.joint_names)
+        display_offsets = _identity._offsets_from_joints(display_joints, self._weights.parents)
         identity: _identity.Identity = {"local_joint_offsets": local_offsets}
         rotations = np.repeat(
             np.eye(3, dtype=self._weights.vertices.dtype)[None],
@@ -173,34 +301,52 @@ class Mannequin:
         )
         joints = _rigid.forward_skeleton_from_local_rotations(
             rotations[self._weights.actuated_joint_indices],
-            local_offsets=local_offsets,
+            local_offsets=display_offsets,
             actuated_joint_indices=self._weights.actuated_joint_indices,
             parents=self._weights.parents,
-            global_translation=local_offsets[0],
+            global_translation=display_offsets[0],
         )
         identity["skin_local_transforms"] = _identity.skin_shape_transforms(
             self._weights.local_offsets,
-            local_offsets,
+            display_offsets,
             self._weights.parents,
         )
-        source_offset = self._weights.skin_root_offset
-        assert source_offset is not None
-        base_vertices = self._map_skin_to_skeleton(joints, identity, source_offset)
-        target_floor = (self._calibration.sole_y_rest + self._calibration.sole_y_dirs @ self._shape).min()
-        root_offset = source_offset.copy()
-        root_offset[1] += target_floor - base_vertices[:, 1].min()
-        identity["skin_root_offset"] = root_offset
-        vertices = self._map_skin_to_skeleton(joints, identity, root_offset)
+        head = self._weights.joint_names.index("Head")
+        identity["skin_local_transforms"][head] = np.eye(3, dtype=self._weights.vertices.dtype)
+        vertices = self._map_skin_to_skeleton(joints, identity)
         head_min = self._calibration.head_min_rest + self._calibration.head_min_dirs @ self._shape
         head_max = self._calibration.head_max_rest + self._calibration.head_max_dirs @ self._shape
         vertices = self._fit_skin_region(vertices, ("Head",), head_min, head_max)
-        bind_positions = joints[:, :3, 3] + root_offset
-        vertices = self._preserve_rigid_parts(vertices, joints, identity, root_offset)
-        identity["skin_vertices"] = self._reshape_forefeet(vertices, bind_positions)
+        bind_positions = rest_joints
+        vertices = self._preserve_rigid_parts(vertices, joints)
+        target_floor = (self._calibration.sole_y_rest + self._calibration.sole_y_dirs @ self._shape).min()
+        vertices = self._reshape_forefeet(vertices, bind_positions, target_floor)
+        identity["skin_vertices"] = self._symmetrize_skin_joints(vertices)
         identity["skin_bind_positions"] = bind_positions
         return identity
 
-    def _reshape_forefeet(self, vertices: np.ndarray, bind_positions: np.ndarray) -> np.ndarray:
+    def _symmetrize_skin_joints(self, vertices: np.ndarray) -> np.ndarray:
+        names = self._weights.skin_part_names
+        starts = self._weights.skin_part_vertex_starts
+        counts = self._weights.skin_part_vertex_counts
+        assert names is not None and starts is not None and counts is not None
+        parts = {name: slice(start, start + count) for name, start, count in zip(names, starts, counts, strict=True)}
+        reflection = np.asarray((-1.0, 1.0, 1.0), dtype=vertices.dtype)
+        result = vertices.copy()
+        for name, left in parts.items():
+            if not name.startswith("joint_L"):
+                continue
+            right = parts[name.replace("joint_L", "joint_R")]
+            result[left] = 0.5 * (vertices[left] + reflection * vertices[right])
+            result[right] = reflection * result[left]
+        return result
+
+    def _reshape_forefeet(
+        self,
+        vertices: np.ndarray,
+        bind_positions: np.ndarray,
+        target_floor: float,
+    ) -> np.ndarray:
         joint_indices = self._skin_joint_indices
         skin_weights = self._skin_weights
         assert joint_indices is not None and skin_weights is not None
@@ -209,8 +355,8 @@ class Mannequin:
         length_scale = 1.2
         cosine, sine = np.cos(angle), np.sin(angle)
         for side in ("L", "R"):
-            ankle = self.joint_names.index(f"{side}_Ankle")
-            toe = self.joint_names.index(f"{side}_Toe")
+            ankle = self._weights.joint_names.index(f"{side}_Ankle")
+            toe = self._weights.joint_names.index(f"{side}_Toe")
             foot_weight = np.sum(
                 np.where(np.isin(joint_indices, (ankle, toe)), skin_weights, 0.0),
                 axis=1,
@@ -222,9 +368,7 @@ class Mannequin:
             result += foot_weight[:, None] * (rotated - relative)
 
             foot = foot_weight > 0.5
-            affected = foot & (foot_weight > 0.0)
-            floor = vertices[foot, 1].min()
-            shift = np.max((floor - result[affected, 1]) / foot_weight[affected])
+            shift = np.max((target_floor - result[foot, 1]) / foot_weight[foot])
             result[:, 1] += foot_weight * shift
         return result
 
@@ -232,22 +376,20 @@ class Mannequin:
         self,
         vertices: np.ndarray,
         joints: np.ndarray,
-        identity: _identity.Identity,
-        root_offset: np.ndarray,
     ) -> np.ndarray:
         assignments = self._weights.skin_rigid_joint_indices
         source_joints = self._weights.skin_source_joint_positions
         assert assignments is not None and source_joints is not None
 
         result = vertices.copy()
-        pelvis = self.joint_names.index("Pelvis")
-        chest = self.joint_names.index("Chest")
+        pelvis = self._weights.joint_names.index("Pelvis")
+        chest = self._weights.joint_names.index("Chest")
         source_axis = source_joints[chest] - source_joints[pelvis]
         target_axis = joints[chest, :3, 3] - joints[pelvis, :3, 3]
         transform = _identity.align_similarity(source_axis, target_axis)
         region = assignments >= 0
         relative = self._weights.vertices[region] - source_joints[pelvis]
-        result[region] = relative @ transform.T + joints[pelvis, :3, 3] + root_offset
+        result[region] = relative @ transform.T + joints[pelvis, :3, 3]
         return result
 
     def _fit_skin_region(
@@ -260,7 +402,7 @@ class Mannequin:
         joint_indices = self._skin_joint_indices
         skin_weights = self._skin_weights
         assert joint_indices is not None and skin_weights is not None
-        joints = [self.joint_names.index(name) for name in joint_names]
+        joints = [self._weights.joint_names.index(name) for name in joint_names]
         influence = np.sum(np.where(np.isin(joint_indices, joints), skin_weights, 0.0), axis=1)
         region = vertices[influence > 0.5]
         source_min = region.min(axis=0)
@@ -323,9 +465,7 @@ class Mannequin:
         assert joint_indices is not None and skin_weights is not None
         relative = self._identity["skin_vertices"][:, None, :] - self._identity["skin_bind_positions"][joint_indices]
         rotations = joints[..., joint_indices, :3, :3]
-        root_offset = self._identity["skin_root_offset"]
-        rotated_offset = np.einsum("...ij,j->...i", joints[..., 0, :3, :3], root_offset)
-        translations = joints[..., joint_indices, :3, 3] + rotated_offset[..., None, None, :]
+        translations = joints[..., joint_indices, :3, 3]
         vertices = np.einsum("...vkij,vkj->...vki", rotations, relative) + translations
         return np.sum(vertices * skin_weights[..., None], axis=-2)
 
@@ -333,7 +473,6 @@ class Mannequin:
         self,
         joints: np.ndarray,
         identity: _identity.Identity,
-        root_offset: np.ndarray,
     ) -> np.ndarray:
         joint_indices = self._skin_joint_indices
         skin_weights = self._skin_weights
@@ -343,8 +482,7 @@ class Mannequin:
         transforms = identity["skin_local_transforms"]
         relative = np.einsum("vkij,vkj->vki", transforms[joint_indices], relative)
         vertices = relative + joints[joint_indices, :3, 3]
-        vertices = np.sum(vertices * skin_weights[..., None], axis=-2)
-        return vertices + root_offset
+        return np.sum(vertices * skin_weights[..., None], axis=-2)
 
 
 __all__ = ["Kind", "Mannequin", "Pose"]
