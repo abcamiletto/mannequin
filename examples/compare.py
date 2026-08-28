@@ -15,16 +15,25 @@ import numpy as np
 import viser
 from body_models.smplx.numpy import SMPLX
 
-from mannequin import PALETTES, Mannequin, PaletteName, Pose, add_to_scene
+from mannequin import PALETTES, Mannequin, PaletteName, add_to_scene
+
+
+def copy_pose(pose: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
+    return {name: value.copy() for name, value in pose.items()}
 
 
 class SmplxHandle:
-    def __init__(self, scene: viser.SceneApi, model: Any, pose: Pose, palette: PaletteName) -> None:
+    def __init__(
+        self,
+        scene: viser.SceneApi,
+        model: Any,
+        pose: dict[str, np.ndarray],
+        palette: PaletteName,
+    ) -> None:
         self._model = model
-        self._pose = pose.copy()
+        self._pose = copy_pose(pose)
         self._shape = np.zeros(model.NUM_SHAPE_COEFFS, dtype=np.float64)
         self._expression = np.zeros(model.NUM_EXPR_COEFFS, dtype=np.float64)
-        self._head_pose = np.zeros((3, 3), dtype=np.float32)
         self._identity = model.prepare_identity(self._shape, self._expression)
         self._root = scene.add_frame("/smplx", show_axes=False)
         self._mesh = scene.add_mesh_simple(
@@ -34,8 +43,8 @@ class SmplxHandle:
             color=PALETTES[palette][0],
         )
 
-    def set_pose(self, pose: Pose) -> None:
-        self._pose = pose.copy()
+    def set_pose(self, pose: dict[str, np.ndarray]) -> None:
+        self._pose = copy_pose(pose)
         self._mesh.vertices = self._vertices()
 
     def set_position(self, position: np.ndarray | tuple[float, float, float]) -> None:
@@ -53,13 +62,13 @@ class SmplxHandle:
     def _vertices(self) -> np.ndarray:
         return np.asarray(
             self._model.forward_vertices(
-                self._pose.body,
-                self._head_pose,
-                self._pose.hands,
+                self._pose["body_pose"],
+                self._pose["head_pose"],
+                self._pose["hand_pose"],
                 identity=self._identity,
-                global_rotation=self._pose.root_rotation,
-                pelvis_rotation=self._pose.pelvis_rotation,
-                global_translation=self._pose.translation,
+                global_rotation=self._pose["global_rotation"],
+                pelvis_rotation=self._pose["pelvis_rotation"],
+                global_translation=self._pose["global_translation"],
             ),
             dtype=np.float32,
         )
@@ -163,8 +172,8 @@ def apply_pose(phase: float) -> None:
     swing = math.sin(angle) * strength
     bounce = math.sin(angle * 2.0) * strength
     pose = armor.rest_pose()
-    pose.hands[:] = hand_pose
-    body = pose.body
+    pose["hand_pose"][:] = hand_pose
+    body = pose["body_pose"]
     body[0, 0] += 0.35 * swing
     body[1, 0] -= 0.35 * swing
     body[2, 2] += 0.08 * bounce
@@ -178,8 +187,8 @@ def apply_pose(phase: float) -> None:
     body[7, 0] += 0.18 * swing
     body[14, 1] += 0.18 * swing
     for (handle, _), (x, z) in zip(figures, layout_positions, strict=True):
-        posed = pose.copy()
-        posed.translation[1] = 0.025 * bounce
+        posed = copy_pose(pose)
+        posed["global_translation"][1] = 0.025 * bounce
         handle.set_position((x, 0.0, z))
         handle.set_pose(posed)
 
