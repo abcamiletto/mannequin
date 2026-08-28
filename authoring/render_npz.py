@@ -44,7 +44,6 @@ if skinned:
     rest = np.sum(
         (verts[:, None, :] - source_joints[skin_joints] + joints[skin_joints]) * skin_weights[..., None], axis=1
     )
-    rest += data["skin_root_offset"]
     world_vertices = np.stack([rest[:, 0], -rest[:, 2], rest[:, 1]], axis=1)
     names = data["skin_part_names"].tolist()
     vertex_starts = data["skin_part_vertex_starts"]

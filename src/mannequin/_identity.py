@@ -21,7 +21,6 @@ class Identity(TypedDict):
     skin_vertices: NotRequired[Float[Array, "V 3"]]
     skin_bind_positions: NotRequired[Float[Array, "J 3"]]
     skin_local_transforms: NotRequired[Float[Array, "J 3 3"]]
-    skin_root_offset: NotRequired[Float[Array, "3"]]
 
 
 @dataclass(frozen=True)
@@ -56,7 +55,7 @@ def prepare(
     shape: np.ndarray,
 ) -> Identity:
     """Prepare rigid geometry for one SMPL-X body shape."""
-    local_offsets = prepare_skeleton(weights, template, calibration, shape)
+    local_offsets = prepare_skeleton(weights, calibration, shape)
     rest_joints = _joints_from_offsets(local_offsets, weights.parents)
     local_vertices, _ = _shape_vertices(weights, template, local_offsets, rest_joints)
     return {"local_joint_offsets": local_offsets, "link_local_vertices": local_vertices}
@@ -64,7 +63,6 @@ def prepare(
 
 def prepare_skeleton(
     weights: io.MannequinWeights,
-    template: IdentityTemplate,
     calibration: io.ShapeCalibration,
     shape: np.ndarray,
 ) -> np.ndarray:
@@ -73,18 +71,8 @@ def prepare_skeleton(
     if shape.ndim != 1:
         raise ValueError(f"shape must have shape [S], got {shape.shape}.")
 
-    local_offsets = weights.local_offsets.copy()
-    if np.any(shape):
-        shaped_joints = (calibration.joint_rest + calibration.joint_dirs @ shape).astype(local_offsets.dtype)
-        measured_offsets = _offsets_from_joints(shaped_joints, weights.parents)
-        local_offsets = _symmetric_length_offsets(weights.local_offsets, measured_offsets, weights.joint_names)
-        rest_joints = _joints_from_offsets(local_offsets, weights.parents)
-        _, mannequin_vertices = _shape_vertices(weights, template, local_offsets, rest_joints)
-        smplx_floor = (calibration.sole_y_rest + calibration.sole_y_dirs @ shape).min()
-        floor_correction = smplx_floor - mannequin_vertices[:, 1].min()
-        ankle_indices = [weights.joint_names.index(name) for name in ("L_Ankle", "R_Ankle")]
-        local_offsets[ankle_indices, 1] += floor_correction
-    return local_offsets
+    shaped_joints = calibration.joint_rest + calibration.joint_dirs @ shape
+    return _offsets_from_joints(shaped_joints, weights.parents).astype(weights.local_offsets.dtype)
 
 
 def _offsets_from_joints(joints: np.ndarray, parents: list[int]) -> np.ndarray:
@@ -93,39 +81,6 @@ def _offsets_from_joints(joints: np.ndarray, parents: list[int]) -> np.ndarray:
     for joint in range(1, len(parents)):
         offsets[joint] = joints[joint] - joints[parents[joint]]
     return offsets
-
-
-def _symmetric_length_offsets(
-    neutral_offsets: np.ndarray,
-    measured_offsets: np.ndarray,
-    joint_names: list[str],
-) -> np.ndarray:
-    result = neutral_offsets.copy()
-    result[0] = measured_offsets[0]
-    indices = {name: index for index, name in enumerate(joint_names)}
-    paired = set()
-    reflection = np.array((-1.0, 1.0, 1.0), dtype=result.dtype)
-
-    for name, left in indices.items():
-        if not name.startswith("L_"):
-            continue
-        right = indices[f"R_{name[2:]}"]
-        paired.update((left, right))
-        neutral_length = np.linalg.norm(neutral_offsets[left])
-        if neutral_length == 0.0:
-            result[[left, right]] = 0.0
-            continue
-        length = 0.5 * (np.linalg.norm(measured_offsets[left]) + np.linalg.norm(measured_offsets[right]))
-        result[left] *= length / neutral_length
-        result[right] = result[left] * reflection
-
-    for joint in range(1, len(result)):
-        if joint in paired:
-            continue
-        neutral_length = np.linalg.norm(neutral_offsets[joint])
-        if neutral_length > 0.0:
-            result[joint] *= np.linalg.norm(measured_offsets[joint]) / neutral_length
-    return result
 
 
 def _shape_vertices(

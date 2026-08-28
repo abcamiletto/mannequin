@@ -154,22 +154,6 @@ source_offsets = np.zeros_like(base["local_offsets"])
 source_offsets[0] = base["local_offsets"][0]
 for joint in range(1, len(parents)):
     source_offsets[joint] = source_joint_positions[joint] - source_joint_positions[parents[joint]]
-target_joints = np.zeros_like(source_offsets)
-target_joints[0] = source_offsets[0]
-for joint in range(1, len(parents)):
-    target_joints[joint] = target_joints[parents[joint]] + source_offsets[joint]
-skin_rest = np.sum(
-    (vertices[:, None, :] - source_joint_positions[skin_joint_indices] + target_joints[skin_joint_indices])
-    * skin_weights[..., None],
-    axis=1,
-)
-armor_rest_parts = []
-for owner, start, count in zip(
-    base["link_joint_indices"], base["link_vertex_starts"], base["link_vertex_counts"], strict=True
-):
-    armor_rest_parts.append(base["vertices"][start : start + count] + target_joints[owner])
-armor_floor = np.concatenate(armor_rest_parts)[:, 1].min()
-skin_root_offset = np.asarray([0.0, armor_floor - skin_rest[:, 1].min(), 0.0], dtype=np.float32)
 
 values = {key: base[key] for key in base.files}
 values.update(
@@ -187,7 +171,6 @@ values.update(
     skin_joint_indices=skin_joint_indices,
     skin_weights=skin_weights,
     skin_source_joint_positions=source_joint_positions,
-    skin_root_offset=skin_root_offset,
     skin_part_names=np.asarray(part_names),
     skin_part_vertex_starts=np.asarray(part_vertex_starts, dtype=np.int64),
     skin_part_vertex_counts=np.asarray(part_vertex_counts, dtype=np.int64),

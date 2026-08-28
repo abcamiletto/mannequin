@@ -66,7 +66,6 @@ class MannequinWeights:
     skin_joint_indices: Int[Array, "V K"] | None
     skin_weights: Float[Array, "V K"] | None
     skin_source_joint_positions: Float[Array, "J 3"] | None
-    skin_root_offset: Float[Array, "3"] | None
     skin_part_names: list[str] | None
     skin_part_vertex_starts: list[int] | None
     skin_part_vertex_counts: list[int] | None
@@ -111,7 +110,6 @@ def load(lod: int = 0, *, kind: Kind = "armor", dtype=np.float32) -> MannequinWe
             skin_joint_indices=data["skin_joint_indices"].astype(np.int64) if skinned else None,
             skin_weights=data["skin_weights"].astype(dtype) if skinned else None,
             skin_source_joint_positions=data["skin_source_joint_positions"].astype(dtype) if skinned else None,
-            skin_root_offset=data["skin_root_offset"].astype(dtype) if skinned else None,
             skin_part_names=data["skin_part_names"].tolist() if skinned else None,
             skin_part_vertex_starts=data["skin_part_vertex_starts"].tolist() if skinned else None,
             skin_part_vertex_counts=data["skin_part_vertex_counts"].tolist() if skinned else None,

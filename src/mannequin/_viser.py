@@ -254,10 +254,7 @@ def _add_skinned_meshes(
 def _skin_bones(model: Mannequin, pose: Pose) -> tuple[np.ndarray, np.ndarray]:
     joints = np.asarray(model.joint_transforms(pose))
     rotations = SO3.conversions.from_rotmat_to_quat(joints[:, :3, :3], convention="wxyz", xp=np)
-    root_offset = model._identity["skin_root_offset"]
-    rotated_offset = joints[0, :3, :3] @ root_offset
-    positions = joints[:, :3, 3] + rotated_offset
-    return rotations, positions
+    return rotations, joints[:, :3, 3]
 
 
 def _add_rigid_meshes(
