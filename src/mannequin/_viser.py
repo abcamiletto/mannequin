@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Literal
 import numpy as np
 from nanomanifold import SO3
 
-from mannequin._model import Kind, Mannequin, Pose
+from mannequin._model import Kind, Mannequin, PoseParameters
 
 if TYPE_CHECKING:
     import viser
@@ -41,7 +41,7 @@ class SceneHandle:
     def __init__(
         self,
         model: Mannequin,
-        pose: Pose,
+        pose: PoseParameters,
         root: viser.FrameHandle,
         frames: list[viser.FrameHandle],
         frame_joints: list[int],
@@ -50,7 +50,7 @@ class SceneHandle:
         palette: Palette,
     ) -> None:
         self._model = model
-        self._pose = pose
+        self._pose = _copy_pose(pose)
         self._root = root
         self._frames = frames
         self._frame_joints = frame_joints
@@ -71,8 +71,8 @@ class SceneHandle:
         self._root.visible = value
 
     @property
-    def pose(self) -> Pose:
-        return self._pose.copy()
+    def pose(self) -> dict[str, np.ndarray]:
+        return _copy_pose(self._pose)
 
     @property
     def shape(self) -> np.ndarray:
@@ -86,9 +86,9 @@ class SceneHandle:
     def position(self) -> np.ndarray:
         return np.asarray(self._root.position).copy()
 
-    def set_pose(self, pose: Pose) -> None:
+    def set_pose(self, pose: PoseParameters) -> None:
         """Set the mannequin pose."""
-        self._pose = pose.copy()
+        self._pose = _copy_pose(pose)
         self._apply_pose()
 
     def set_position(self, position: np.ndarray | tuple[float, float, float]) -> None:
@@ -101,6 +101,7 @@ class SceneHandle:
     def set_shape(self, shape: np.ndarray) -> None:
         """Set the ten SMPL-X shape coefficients."""
         self._model.reshape(shape)
+        self._pose["shape"] = self._model.shape
         self._update_shape()
         self._apply_pose()
 
@@ -193,11 +194,15 @@ def _palette_colors(palette: Palette) -> tuple[Color, Color]:
     return PALETTES[palette] if isinstance(palette, str) else palette
 
 
+def _copy_pose(pose: PoseParameters) -> dict[str, np.ndarray]:
+    return {name: np.asarray(value).copy() for name, value in pose.items()}
+
+
 def _add_skinned_meshes(
     scene: viser.SceneApi,
     name: str,
     model: Mannequin,
-    pose: Pose,
+    pose: PoseParameters,
     body_color: Color,
     joint_color: Color,
     flat_shading: bool,
@@ -251,7 +256,7 @@ def _add_skinned_meshes(
     return skins
 
 
-def _skin_bones(model: Mannequin, pose: Pose) -> tuple[np.ndarray, np.ndarray]:
+def _skin_bones(model: Mannequin, pose: PoseParameters) -> tuple[np.ndarray, np.ndarray]:
     joints = np.asarray(model.joint_transforms(pose))
     rotations = SO3.conversions.from_rotmat_to_quat(joints[:, :3, :3], convention="wxyz", xp=np)
     return rotations, joints[:, :3, 3]

@@ -45,11 +45,11 @@ def probe_parameter_order(model):
     marker = np.array([0.7, 0.0, 0.0], np.float32)
     rest = model.rest_pose()
     order = {}
-    for name, rows in (("body", 21), ("hands", 30)):
+    for name, parameter, rows in (("body", "body_pose", 21), ("hands", "hand_pose", 30)):
         joints = []
         for row in range(rows):
-            pose = rest.copy()
-            getattr(pose, name)[row] = marker
+            pose = {key: value.copy() for key, value in rest.items()}
+            pose[parameter][row] = marker
             skeleton = np.asarray(model.joint_transforms(pose))
             moved = np.where(~np.isclose(local_rotations(skeleton, parents), np.eye(3), atol=1e-6).all((1, 2)))[0]
             assert len(moved) <= 1, (name, row, moved)
@@ -183,11 +183,11 @@ def validate(glb, model):
     order = root["extras"]["smplx_order"]
 
     pose = model.rest_pose()
-    pose.body[15, 2] = 0.5
-    pose.hands[0, 0] = 0.3
+    pose["body_pose"][15, 2] = 0.5
+    pose["hand_pose"][0, 0] = 0.3
     quats = {}
-    for name in ("body", "hands"):
-        for joint_name, axis_angle in zip(order[name], getattr(pose, name), strict=True):
+    for name, parameter in (("body", "body_pose"), ("hands", "hand_pose")):
+        for joint_name, axis_angle in zip(order[name], pose[parameter], strict=True):
             if joint_name is not None:
                 quats[joint_name] = SO3.convert(axis_angle, src="axis_angle", dst="quat", xp=np)
 

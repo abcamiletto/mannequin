@@ -6,9 +6,10 @@ rotations:
 - `armor` is the repo's segmented rigid mannequin, available in three LODs.
 - `wooden` is a skinned wooden mannequin at its source resolution.
 
-Both designs accept the same `Pose`. Ten SMPL-X shape coefficients resize their
-bones and geometry. The NumPy runtime includes the required shape calibration,
-so it does not need SMPL-X model files.
+Both designs accept pose dictionaries with the same fields as `body-models`.
+Ten SMPL-X shape coefficients resize their bones and geometry. The NumPy
+runtime includes the required shape calibration, so it does not need SMPL-X
+model files.
 
 ```bash
 pip install mannequin-x
@@ -26,15 +27,15 @@ shape[0] = 1.5
 
 model = Mannequin("wooden", shape=shape)
 pose = model.rest_pose()
-pose.body[17, 2] = 0.8
+pose["body_pose"][17, 2] = 0.8
 
 vertices = model.vertices(pose)
 faces = model.faces
 joint_transforms = model.joint_transforms(pose)
 ```
 
-The skeleton API also accepts the parameter dictionary returned by
-`body-models` without renaming fields:
+The same methods accept the parameter dictionary returned by `body-models`
+without renaming fields:
 
 ```python
 from body_models.smplx.numpy import SMPLX
@@ -48,33 +49,32 @@ joint_transforms = model.joint_transforms(rest)
 vertices = model.vertices(rest)
 ```
 
-`forward_skeleton()` uses the `body_pose`, `head_pose`, `hand_pose`,
+`forward_skeleton()` accepts the `body_pose`, `head_pose`, `hand_pose`,
 `pelvis_rotation`, `shape`, `expression`, `global_rotation`, and
-`global_translation` names from `body-models`. `get_rest_pose()` returns the
-same keys. `joint_names` uses the SMPL-X names `Spine1`, `Spine2`, `Spine3`,
+`global_translation` fields from `body-models`. `rest_pose()` returns those
+same fields. `joint_names` uses the SMPL-X names `Spine1`, `Spine2`, `Spine3`,
 `L_Foot`, `R_Foot`, `L_Collar`, and `R_Collar`. The mannequin omits the jaw and
 eye joints and adds zero-length `L_Hand` and `R_Hand` skinning joints at the
-wrists.
+wrists. It accepts but ignores `head_pose` and `expression` because neither
+mannequin has the corresponding joints or geometry.
 
 Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
 2. The wooden model has one resolution, so it does not accept `lod`.
 
-`rest_pose()` returns a mutable `Pose` with five arrays:
+`rest_pose()` returns a mutable dictionary with the `body-models` fields:
 
-- `body`: `[..., 21, 3]` SMPL-X body rotations
-- `hands`: `[..., 30, 3]` left and right hand rotations
-- `root_rotation`: `[..., 3]` world rotation
+- `body_pose`: `[..., 21, 3]` SMPL-X body rotations
+- `head_pose`: `[..., 3, 3]` unused jaw and eye rotations
+- `hand_pose`: `[..., 30, 3]` left and right hand rotations
+- `global_rotation`: `[..., 3]` world rotation
 - `pelvis_rotation`: `[..., 3]` pelvis rotation about the pelvis joint
-- `translation`: `[..., 3]` world translation
+- `global_translation`: `[..., 3]` world translation
+- `shape`: `[..., 10]` mannequin shape coefficients
+- `expression`: `[..., 10]` unused expression coefficients
 
-The corresponding `body-models` aliases are available as `body_pose`,
-`hand_pose`, `global_rotation`, and `global_translation`.
-
-`root_rotation` rotates the whole figure around the SMPL-X origin.
+`global_rotation` rotates the whole figure around the SMPL-X origin.
 `pelvis_rotation` rotates the body around the pelvis without moving the pelvis.
 Rotations use axis-angle vectors. Leading batch dimensions are supported.
-Jaw, eye, and expression parameters are absent because neither mannequin has
-matching geometry or joints.
 
 Shape is identity state, not motion state. Set it at construction or call
 `model.reshape(shape)`. Pose evaluation then stays concise:
