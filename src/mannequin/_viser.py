@@ -25,7 +25,7 @@ PALETTES: dict[PaletteName, tuple[Color, Color]] = {
     "slate": ((77, 116, 161), (32, 59, 96)),
     "wood": ((181, 113, 54), (92, 52, 24)),
 }
-DEFAULT_PALETTES: dict[Kind, PaletteName] = {"armor": "sand", "wooden": "wood"}
+DEFAULT_PALETTES: dict[Kind, PaletteName] = {"armor": "sand", "wooden": "wood", "atelier": "wood"}
 
 
 @dataclass(frozen=True)

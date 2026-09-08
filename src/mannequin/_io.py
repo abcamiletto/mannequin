@@ -10,7 +10,7 @@ import numpy as np
 from jaxtyping import Float, Int
 
 Array = Any
-Kind = Literal["armor", "wooden"]
+Kind = Literal["armor", "wooden", "atelier"]
 
 
 @dataclass(frozen=True)
@@ -78,8 +78,8 @@ def load(lod: int = 0, *, kind: Kind = "armor", dtype=np.float32) -> MannequinWe
     """Load one bundled mannequin style and LOD."""
     if lod not in (0, 1, 2):
         raise ValueError(f"lod must be 0, 1, or 2; got {lod!r}")
-    if kind not in ("armor", "wooden"):
-        raise ValueError(f"kind must be 'armor' or 'wooden'; got {kind!r}")
+    if kind not in ("armor", "wooden", "atelier"):
+        raise ValueError(f"kind must be 'armor', 'wooden', or 'atelier'; got {kind!r}")
 
     asset_name = f"lod{lod}.npz" if kind == "armor" else f"{kind}.npz"
     resource = files("mannequin") / "assets" / asset_name

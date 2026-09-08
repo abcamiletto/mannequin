@@ -12,7 +12,7 @@ from nanomanifold import SO3
 from mannequin import _identity, _io, _rigid
 
 Array = Any
-Kind = Literal["armor", "wooden"]
+Kind = _io.Kind
 Lod = Literal[0, 1, 2]
 PoseParameters = Mapping[str, Array]
 
@@ -244,7 +244,7 @@ class Mannequin:
         head_max = self._calibration.head_max_rest + self._calibration.head_max_dirs @ self._shape
         vertices = self._fit_skin_region(vertices, ("Head",), head_min, head_max)
         bind_positions = rest_joints
-        vertices = self._preserve_rigid_parts(vertices, joints)
+        vertices = self._fit_torso(vertices, joints)
         target_floor = (self._calibration.sole_y_rest + self._calibration.sole_y_dirs @ self._shape).min()
         vertices = self._reshape_forefeet(vertices, bind_positions, target_floor)
         identity["skin_vertices"] = self._symmetrize_skin_joints(vertices)
@@ -298,7 +298,7 @@ class Mannequin:
             result[:, 1] += foot_weight * shift
         return result
 
-    def _preserve_rigid_parts(
+    def _fit_torso(
         self,
         vertices: np.ndarray,
         joints: np.ndarray,
@@ -313,9 +313,25 @@ class Mannequin:
         source_axis = source_joints[chest] - source_joints[pelvis]
         target_axis = joints[chest, :3, 3] - joints[pelvis, :3, 3]
         transform = _identity.align_similarity(source_axis, target_axis)
-        region = assignments >= 0
-        relative = self._weights.vertices[region] - source_joints[pelvis]
-        result[region] = relative @ transform.T + joints[pelvis, :3, 3]
+        # Shoulder socket vertices share the torso's shape fit, even when their
+        # collar weights let them move with a shrug instead of the rigid chest.
+        names = self._weights.skin_part_names
+        starts = self._weights.skin_part_vertex_starts
+        counts = self._weights.skin_part_vertex_counts
+        assert names is not None and starts is not None and counts is not None
+        body = names.index("body")
+        body_indices = np.arange(starts[body], starts[body] + counts[body])
+        relative = self._weights.vertices[body_indices] - source_joints[pelvis]
+        result[body_indices] = relative @ transform.T + joints[pelvis, :3, 3]
+        sockets = body_indices[assignments[body_indices] < 0]
+        assert self._skin_joint_indices is not None and self._skin_weights is not None
+        for side in ("L", "R"):
+            shoulder = self._weights.joint_names.index(f"{side}_Shoulder")
+            collar = self._weights.joint_names.index(f"{side}_Thorax")
+            collar_weights = np.where(self._skin_joint_indices[sockets] == collar, self._skin_weights[sockets], 0.0)
+            influence = collar_weights.sum(axis=1)
+            source_center = (source_joints[shoulder] - source_joints[pelvis]) @ transform.T + joints[pelvis, :3, 3]
+            result[sockets] += influence[:, None] * (joints[shoulder, :3, 3] - source_center)
         return result
 
     def _fit_skin_region(
