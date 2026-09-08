@@ -1,12 +1,13 @@
 # SMPL-X Mannequin
 
-`mannequin-x` provides two lightweight figures driven by SMPL-X body and hand
+`mannequin-x` provides three lightweight figures driven by SMPL-X body and hand
 rotations:
 
 - `armor` is the repo's segmented rigid mannequin, available in three LODs.
-- `wooden` is a skinned wooden mannequin at its source resolution.
+- `wooden` is the original skinned wooden mannequin.
+- `atelier` is a slimmer wooden design with rounded shoulder sockets and four weights per vertex.
 
-Both designs accept pose dictionaries with the same fields as `body-models`.
+All designs accept pose dictionaries with the same fields as `body-models`.
 Ten SMPL-X shape coefficients resize their bones and geometry. The NumPy
 runtime includes the required shape calibration, so it does not need SMPL-X
 model files.
@@ -25,7 +26,7 @@ from mannequin import Mannequin
 shape = np.zeros(10, dtype=np.float32)
 shape[0] = 1.5
 
-model = Mannequin("wooden", shape=shape)
+model = Mannequin("atelier", shape=shape)
 pose = model.rest_pose()
 pose["body_pose"][17, 2] = 0.8
 
@@ -59,7 +60,7 @@ wrists. It accepts but ignores `head_pose` and `expression` because neither
 mannequin has the corresponding joints or geometry.
 
 Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
-2. The wooden model has one resolution, so it does not accept `lod`.
+2. The wooden and atelier models each have one resolution and do not accept `lod`.
 
 `rest_pose()` returns a mutable dictionary with the `body-models` fields:
 
@@ -95,7 +96,7 @@ import viser
 from mannequin import Mannequin, add_to_scene
 
 server = viser.ViserServer()
-model = Mannequin("wooden")
+model = Mannequin("atelier")
 handle = add_to_scene(server.scene, "/mannequin", model)
 
 handle.set_pose(model.rest_pose())
@@ -115,7 +116,7 @@ Run the live comparison against a local neutral SMPL-X model:
 uv run python examples/compare.py /path/to/SMPLX_NEUTRAL.npz
 ```
 
-The viewer shows armor, wooden, and full SMPL-X figures with matched motion,
+The viewer shows armor, wooden, atelier, and full SMPL-X figures with matched motion,
 random hand poses, shape controls, front and side views, a T-pose button, and a
 shared palette. The SMPL-X file remains external to the package.
 
@@ -129,12 +130,52 @@ The root extras contain the SMPL-X body and hand parameter mapping. See
 
 The editable armor source is [`authoring/mannequin.blend`](authoring/mannequin.blend).
 
-`src/mannequin/assets/wooden.npz` retains its source vertices and skin weights,
-converts coordinates, triangulates faces, and maps 52 source bones onto this
-package's joint hierarchy. Rebuild it with `authoring/import_wooden.py`.
+The editable Atelier source is [`authoring/atelier.blend`](authoring/atelier.blend),
+with separate meshes, a poseable armature, and satin wood materials.
+`src/mannequin/assets/atelier.npz` has slimmer limbs and torso, smoother surfaces,
+the original head and feet, and turned upper arms with circular shoulder sockets.
+The torso sockets blend between chest and collar weights so they follow raised
+and rolled shoulders. The skeleton is unchanged; upper-arm topology is rebuilt
+and all vertices use at most four normalized skin weights. Blender materials
+are for authoring; the viewer continues to use its selected palette.
+
+Rebuild from the original FBX in two steps (Blender 5.0):
+
+```bash
+blender --background --factory-startup --python authoring/import_wooden.py -- \
+    wooden.fbx /tmp/wooden-imported.npz
+blender --background --factory-startup --python authoring/build_atelier.py -- \
+    /tmp/wooden-imported.npz src/mannequin/assets/atelier.npz authoring/atelier.blend
+```
+
+Build directly from the bundled original with `src/mannequin/assets/wooden.npz`
+as the input, or import the source FBX first. The builder requires an unpolished
+input so repeated runs do not keep shrinking the model. The Blender rig uses the imported rest skeleton; the Python
+runtime additionally maps it to the calibrated SMPL-X proportions.
 
 `authoring/bake_calibration.py` uses the NumPy SMPL-X implementation from
 `body-models` to bake the joint, ground-plane, head, and height response for the
 first ten shape coefficients. Pass it a local `SMPLX_NEUTRAL.npz`; the runtime
 does not depend on `body-models` or the SMPL-X file. The wooden torso keeps its
 source proportions.
+
+Atelier uses the same SMPL-X calibration as Wooden. Rebuild and measure it with:
+
+```bash
+uv run python authoring/bake_calibration.py /path/to/SMPLX_NEUTRAL.npz /tmp/calibration.npz
+uv run python authoring/check_calibration.py /path/to/SMPLX_NEUTRAL.npz atelier authoring/atelier_calibration.json
+```
+
+The [calibration report](authoring/atelier_calibration.json) covers all ten shape
+coefficients and 175 poses across 25 shapes. The maximum joint and floor errors
+are below 0.001 mm; the maximum rest-height difference is 0.16 mm. This measures
+skeleton and size agreement, not a match to the human body's surface.
+
+[Atelier preview](renders/atelier_posed_full_quarter.png) ·
+[Shoulder motion](renders/atelier_shoulders_shrug.png)
+
+Atelier preserves Wooden's foot surfaces and skeleton. The geometry checks compare
+all 54 joint transforms and every foot vertex across 121 shapes (all ten shape
+coefficients at ±3 plus 100 mixed shapes and neutral) and four poses per shape.
+They require exact equality, including heel/toe placement and sole height, and
+run in CI with `uv run python -m unittest discover -s tests -v`.

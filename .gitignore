@@ -5,3 +5,4 @@ dist/
 renders/*
 !renders/palettes.jpg
 *.blend1
+!renders/atelier_*.png

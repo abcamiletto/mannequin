@@ -15,7 +15,7 @@ import numpy as np
 import viser
 from body_models.smplx.numpy import SMPLX
 
-from mannequin import PALETTES, Mannequin, PaletteName, add_to_scene
+from mannequin import PALETTES, Mannequin, PaletteName, SceneHandle, add_to_scene
 
 
 def copy_pose(pose: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
@@ -81,46 +81,39 @@ args = parser.parse_args()
 server = viser.ViserServer(port=8080)
 server.scene.set_up_direction("+y")
 armor = Mannequin("armor", lod=1)
-wooden = Mannequin("wooden")
+models = (armor, Mannequin("wooden"), Mannequin("atelier"))
 smplx = SMPLX(model_path=args.smplx_model, flat_hand_mean=True)
-armor_rest = armor.vertices(armor.rest_pose())
-wooden_rest = wooden.vertices(wooden.rest_pose())
-smplx_pose = armor.rest_pose()
-smplx_rest = np.asarray(smplx.rest_vertices)
-floor_y = float(min(armor_rest[:, 1].min(), wooden_rest[:, 1].min(), smplx_rest[:, 1].min()))
-label_y = float(max(armor_rest[:, 1].max(), wooden_rest[:, 1].max(), smplx_rest[:, 1].max()) + 0.12)
+rest_vertices = [model.vertices(model.rest_pose()) for model in models]
+rest_vertices.append(np.asarray(smplx.rest_vertices))
+floor_y = float(min(vertices[:, 1].min() for vertices in rest_vertices))
+label_y = float(max(vertices[:, 1].max() for vertices in rest_vertices) + 0.12)
 
 server.scene.add_grid(
     "/floor",
-    width=9.2,
-    height=4.0,
+    width=12.0,
+    height=12.0,
     plane="xz",
     cell_size=0.1,
     section_size=0.5,
     position=(0.0, floor_y, 0.0),
 )
 
-armor_handle = add_to_scene(server.scene, "/armor", armor, palette="slate")
-wooden_handle = add_to_scene(server.scene, "/wooden", wooden, palette="slate")
-smplx_handle = SmplxHandle(server.scene, smplx, smplx_pose, "slate")
-armor_label = server.scene.add_label(
-    "/armor_label",
-    "Armor",
-    position=(-2.4, label_y, 0.0),
-    anchor="bottom-center",
-)
-wooden_label = server.scene.add_label(
-    "/wooden_label",
-    "Wooden",
-    position=(2.4, label_y, 0.0),
-    anchor="bottom-center",
-)
-smplx_label = server.scene.add_label(
-    "/smplx_label",
-    "SMPL-X",
-    position=(0.0, label_y, 0.0),
-    anchor="bottom-center",
-)
+handles: list[SceneHandle | SmplxHandle] = [
+    add_to_scene(server.scene, f"/{model.kind}", model, palette="slate") for model in models
+]
+handles.insert(1, SmplxHandle(server.scene, smplx, armor.rest_pose(), "slate"))
+figure_names = ("Armor", "SMPL-X", "Wooden", "Atelier")
+FRONT_POSITIONS = tuple((x, 0.0) for x in (-3.6, -1.2, 1.2, 3.6))
+SIDE_POSITIONS = tuple((0.0, x) for x, _ in FRONT_POSITIONS)
+figures = []
+for name, handle, (x, z) in zip(figure_names, handles, FRONT_POSITIONS, strict=True):
+    label = server.scene.add_label(
+        f"/{name.lower()}_label",
+        name,
+        position=(x, label_y, z),
+        anchor="bottom-center",
+    )
+    figures.append((handle, label))
 
 with server.gui.add_folder("View"):
     front_view_button = server.gui.add_button("Front view")
@@ -147,17 +140,9 @@ with server.gui.add_folder("Appearance"):
     )
     reset_shape = server.gui.add_button("Reset shape")
     server.gui.add_markdown(
-        "The same SMPL-X shape coefficients drive all three figures. The reference "
+        "The same SMPL-X shape coefficients drive all four figures. The reference "
         "uses the full body model; the mannequins map shape to bone lengths and rigid parts."
     )
-
-FRONT_POSITIONS = ((-2.4, 0.0), (0.0, 0.0), (2.4, 0.0))
-SIDE_POSITIONS = ((0.0, -2.4), (0.0, 0.0), (0.0, 2.4))
-figures = (
-    (armor_handle, armor_label),
-    (smplx_handle, smplx_label),
-    (wooden_handle, wooden_label),
-)
 
 updating_controls = False
 random = np.random.default_rng()
@@ -220,10 +205,10 @@ def set_view(side: bool, client: viser.ClientHandle) -> None:
     for (_, label), (x, z) in zip(figures, layout_positions, strict=True):
         label.position = (x, label_y, z)
     set_t_pose()
-    client.camera.position = (8.0, 0.7, -1.3) if side else (0.5, 0.7, 8.0)
-    client.camera.look_at = (0.0, floor_y + 0.85, -1.3) if side else (0.5, floor_y + 0.85, 0.0)
+    client.camera.position = (14.0, 0.7, 0.0) if side else (0.0, 0.7, 14.0)
+    client.camera.look_at = (0.0, floor_y + 0.85, 0.0)
     client.camera.up_direction = (0.0, 1.0, 0.0)
-    client.camera.fov = math.radians(35.0)
+    client.camera.fov = math.radians(45.0)
 
 
 @front_view_button.on_click
