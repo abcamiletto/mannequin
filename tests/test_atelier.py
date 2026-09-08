@@ -35,6 +35,36 @@ class AtelierTests(unittest.TestCase):
         digest = hashlib.sha256(weights.vertices[start : start + count].astype(np.float32).tobytes()).hexdigest()
         self.assertEqual(digest, "a3352792690edce4de7d9d19e9302bfeff48fbb60356180b4327d377a5c2b185")
 
+    def test_wooden_foot_plant_and_joints_across_shapes(self):
+        wooden, atelier = Mannequin("wooden"), Mannequin("atelier")
+        wooden_feet = {side: foot_indices(wooden._weights, side) for side in ("L", "R")}
+        atelier_feet = {side: foot_indices(atelier._weights, side) for side in ("L", "R")}
+        self.assertEqual(wooden.joint_names, atelier.joint_names)
+        for side in ("L", "R"):
+            self.assertEqual(len(wooden_feet[side]), 1202)
+            self.assertEqual(len(atelier_feet[side]), 1202)
+        random = np.random.default_rng(20260908)
+        unit_shapes = np.concatenate((3 * np.eye(10), -3 * np.eye(10)))
+        shapes = np.concatenate((np.zeros((1, 10)), unit_shapes, random.uniform(-3, 3, (100, 10))))
+        for shape in shapes:
+            wooden.reshape(shape)
+            atelier.reshape(shape)
+            for motion in range(4):
+                pose = wooden.rest_pose()
+                if motion:
+                    pose["body_pose"] = random.uniform(-0.6, 0.6, (21, 3))
+                    pose["hand_pose"] = random.uniform(-0.4, 0.4, (30, 3))
+                    pose["pelvis_rotation"] = random.uniform(-0.3, 0.3, 3)
+                    pose["global_rotation"] = random.uniform(-0.3, 0.3, 3)
+                    pose["global_translation"] = random.uniform(-1, 1, 3)
+                with self.subTest(shape=shape.tolist(), motion=motion):
+                    np.testing.assert_array_equal(atelier.joint_transforms(pose), wooden.joint_transforms(pose))
+                    expected, actual = wooden.vertices(pose), atelier.vertices(pose)
+                    for side in ("L", "R"):
+                        # Full-surface equality includes heel/toe contact locations,
+                        # sole height, and orientation relative to ankle and toe joints.
+                        np.testing.assert_array_equal(actual[atelier_feet[side]], expected[wooden_feet[side]])
+
     def test_socket_rims_follow_shoulders(self):
         # Full collar-weight socket vertices must stay the same distance from
         # the shoulder pivot during clavicle motion and independent arm rotation.
@@ -69,6 +99,21 @@ class AtelierTests(unittest.TestCase):
                         self.assertTrue(np.isfinite(vertices).all())
                         radii = np.linalg.norm(vertices[ids] - joints[shoulder, :3, 3], axis=1)
                         np.testing.assert_allclose(radii, rest_radius, atol=2e-7)
+
+
+def foot_indices(data: _io.MannequinWeights, side: str) -> np.ndarray:
+    assert data.skin_part_names is not None
+    assert data.skin_part_vertex_starts is not None
+    assert data.skin_part_vertex_counts is not None
+    assert data.skin_source_joint_positions is not None
+    part = data.skin_part_names.index("leg")
+    start, count = data.skin_part_vertex_starts[part], data.skin_part_vertex_counts[part]
+    ids = np.arange(start, start + count)
+    ankle = data.joint_names.index(f"{side}_Ankle")
+    source = data.vertices[ids]
+    below_ankle = source[:, 1] < data.skin_source_joint_positions[ankle, 1]
+    on_side = source[:, 0] > 0 if side == "L" else source[:, 0] < 0
+    return ids[below_ankle & on_side]
 
 
 if __name__ == "__main__":

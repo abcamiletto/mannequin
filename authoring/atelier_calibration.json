@@ -8,5 +8,5 @@
   "max_joint_position_error_m": 1.8039793303614715e-07,
   "max_joint_rotation_matrix_error": 7.216449660063518e-16,
   "max_rest_floor_error_m": 2.082311378881485e-07,
-  "max_rest_height_error_m": 0.00015691032583853293
+  "max_rest_height_error_m": 0.0001568811624106381
 }

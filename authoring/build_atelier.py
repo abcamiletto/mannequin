@@ -242,7 +242,10 @@ def polish_surfaces(values, parts):
             elif name == "arm" and 0.44 < abs(center[0]) < 0.70:
                 start, end = joints[f"{side}_Elbow"], joints[f"{side}_Wrist"]
                 q = slim_link(q, start, end, 0.84, 0.90, 0.93)
-            elif name == "leg" and center[1] > -1.04:
+            elif name == "leg" and center[1] <= -1.04:
+                # Preserve the heel, toe, and sole contact surface exactly.
+                q = original[vs + ids].copy()
+            elif name == "leg":
                 upper = center[1] > -0.67
                 a, b = ("Hip", "Knee") if upper else ("Knee", "Ankle")
                 q = slim_link(

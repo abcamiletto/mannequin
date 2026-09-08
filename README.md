@@ -133,7 +133,7 @@ The editable armor source is [`authoring/mannequin.blend`](authoring/mannequin.b
 The editable Atelier source is [`authoring/atelier.blend`](authoring/atelier.blend),
 with separate meshes, a poseable armature, and satin wood materials.
 `src/mannequin/assets/atelier.npz` has slimmer limbs and torso, smoother surfaces,
-the original head, and turned upper arms with circular shoulder sockets.
+the original head and feet, and turned upper arms with circular shoulder sockets.
 The torso sockets blend between chest and collar weights so they follow raised
 and rolled shoulders. The skeleton is unchanged; upper-arm topology is rebuilt
 and all vertices use at most four normalized skin weights. Blender materials
@@ -173,3 +173,9 @@ skeleton and size agreement, not a match to the human body's surface.
 
 [Atelier preview](renders/atelier_posed_full_quarter.png) ·
 [Shoulder motion](renders/atelier_shoulders_shrug.png)
+
+Atelier preserves Wooden's foot surfaces and skeleton. The geometry checks compare
+all 54 joint transforms and every foot vertex across 121 shapes (all ten shape
+coefficients at ±3 plus 100 mixed shapes and neutral) and four poses per shape.
+They require exact equality, including heel/toe placement and sole height, and
+run in CI with `uv run python -m unittest discover -s tests -v`.
