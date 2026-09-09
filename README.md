@@ -1,12 +1,14 @@
 # SMPL-X Mannequin
 
-`mannequin-x` provides two lightweight figures driven by SMPL-X body and hand
+`mannequin-x` provides lightweight figures driven by SMPL-X body and hand
 rotations:
 
 - `armor` is the repo's segmented rigid mannequin, available in three LODs.
+- `convex` is a simulation-friendly human made only from rigid convex hulls,
+  available in three LODs.
 - `wooden` is a skinned wooden mannequin at its source resolution.
 
-Both designs accept pose dictionaries with the same fields as `body-models`.
+All designs accept pose dictionaries with the same fields as `body-models`.
 Ten SMPL-X shape coefficients resize their bones and geometry. The NumPy
 runtime includes the required shape calibration, so it does not need SMPL-X
 model files.
@@ -58,8 +60,9 @@ eye joints and adds zero-length `L_Hand` and `R_Hand` skinning joints at the
 wrists. It accepts but ignores `head_pose` and `expression` because neither
 mannequin has the corresponding joints or geometry.
 
-Create armor with `Mannequin("armor", lod=0)`. Armor supports LODs 0, 1, and
-2. The wooden model has one resolution, so it does not accept `lod`.
+Create the convex model with `Mannequin("convex", lod=0)`. Its LODs contain 80,
+52, and 22 hulls respectively. Armor also supports LODs 0, 1, and 2. The wooden
+model has one resolution, so it does not accept `lod`.
 
 `rest_pose()` returns a mutable dictionary with the `body-models` fields:
 

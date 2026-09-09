@@ -12,7 +12,7 @@ from nanomanifold import SO3
 from mannequin import _identity, _io, _rigid
 
 Array = Any
-Kind = Literal["armor", "wooden"]
+Kind = Literal["armor", "convex", "wooden"]
 Lod = Literal[0, 1, 2]
 PoseParameters = Mapping[str, Array]
 
@@ -34,7 +34,7 @@ SMPLX_JOINT_NAMES = {
 class Mannequin:
     """One mannequin design and body shape.
 
-    Armor uses rigid links. Wooden mannequins use linear blend skinning.
+    Armor and convex mannequins use rigid links. Wooden mannequins use skinning.
     Shape coefficients change bone lengths and reshape geometry along each bone.
     """
 
@@ -45,7 +45,7 @@ class Mannequin:
         lod: Lod | None = None,
         shape: Float[Array, "10"] | None = None,
     ) -> None:
-        if kind != "armor" and lod is not None:
+        if kind == "wooden" and lod is not None:
             raise ValueError(f"The {kind} mannequin has one resolution; omit lod.")
         asset_lod = 0 if lod is None else lod
         self._kind = kind
