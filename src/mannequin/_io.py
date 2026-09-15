@@ -10,12 +10,12 @@ import numpy as np
 from jaxtyping import Float, Int
 
 Array = Any
-Kind = Literal["armor", "convex", "wooden"]
+Kind = Literal["convex", "wooden"]
 
 
 @dataclass(frozen=True)
 class ShapeCalibration:
-    """Affine SMPL-X shape response baked in mannequin joint order.
+    """SMPL-X shape response and neutral hand mean baked for the runtime.
 
     Rest joints are exactly linear in the first ten SMPL-X betas, and the
     shaped-body floor is the minimum over the (also linear) heights of the
@@ -31,6 +31,7 @@ class ShapeCalibration:
     head_max_rest: Float[Array, "3"]
     head_min_dirs: Float[Array, "3 10"]
     head_max_dirs: Float[Array, "3 10"]
+    hand_mean: Float[Array, "30 3"]
 
 
 def load_calibration(*, dtype=np.float64) -> ShapeCalibration:
@@ -46,6 +47,7 @@ def load_calibration(*, dtype=np.float64) -> ShapeCalibration:
             head_max_rest=data["head_max_rest"].astype(dtype),
             head_min_dirs=data["head_min_dirs"].astype(dtype),
             head_max_dirs=data["head_max_dirs"].astype(dtype),
+            hand_mean=data["hand_mean"].astype(dtype),
         )
 
 
@@ -74,19 +76,14 @@ class MannequinWeights:
     skin_rigid_joint_indices: Int[Array, "V"] | None
 
 
-def load(lod: int = 0, *, kind: Kind = "armor", dtype=np.float32) -> MannequinWeights:
+def load(lod: int = 0, *, kind: Kind = "wooden", dtype=np.float32) -> MannequinWeights:
     """Load one bundled mannequin style and LOD."""
     if lod not in (0, 1, 2):
         raise ValueError(f"lod must be 0, 1, or 2; got {lod!r}")
-    if kind not in ("armor", "convex", "wooden"):
+    if kind not in ("convex", "wooden"):
         raise ValueError(f"unknown mannequin kind: {kind!r}")
 
-    if kind == "armor":
-        asset_name = f"lod{lod}.npz"
-    elif kind == "convex":
-        asset_name = f"convex{lod}.npz"
-    else:
-        asset_name = "wooden.npz"
+    asset_name = f"convex{lod}.npz" if kind == "convex" else "wooden.npz"
     resource = files("mannequin") / "assets" / asset_name
     with resource.open("rb") as archive, np.load(archive, allow_pickle=False) as data:
         skinned = "skin_weights" in data.files
