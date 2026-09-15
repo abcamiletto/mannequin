@@ -19,11 +19,73 @@ from mathutils import Matrix
 
 SOURCE_SHA256 = "4e1a4fc5b121d5fa61a631ee22ba360ca128279d794d1ed75b2acb9486e71cc8"
 MAX_INFLUENCES = 8
+BODY_JOINT_NAMES = (
+    "Pelvis",
+    "L_Hip",
+    "R_Hip",
+    "Torso",
+    "L_Knee",
+    "R_Knee",
+    "Spine",
+    "L_Ankle",
+    "R_Ankle",
+    "Chest",
+    "L_Toe",
+    "R_Toe",
+    "Neck",
+    "L_Thorax",
+    "R_Thorax",
+    "Head",
+    "L_Shoulder",
+    "R_Shoulder",
+    "L_Elbow",
+    "R_Elbow",
+    "L_Wrist",
+    "R_Wrist",
+    "L_Hand",
+    "R_Hand",
+)
+BODY_PARENTS = (-1, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 9, 9, 12, 13, 14, 16, 17, 18, 19, 20, 21)
+BODY_PARAMETER_JOINTS = (
+    1,
+    4,
+    7,
+    10,
+    2,
+    5,
+    8,
+    11,
+    3,
+    6,
+    9,
+    12,
+    15,
+    13,
+    16,
+    18,
+    20,
+    22,
+    14,
+    17,
+    19,
+    21,
+    23,
+)
+FINGER_NAMES = ("Index", "Middle", "Pinky", "Ring", "Thumb")
+
+joint_names = list(BODY_JOINT_NAMES)
+parents = list(BODY_PARENTS)
+for side, hand in (("L", 22), ("R", 23)):
+    for finger in FINGER_NAMES:
+        parent = hand
+        for segment in range(1, 4):
+            joint_names.append(f"{side}_{finger}{segment}")
+            parents.append(parent)
+            parent = len(joint_names) - 1
+actuated_joint_indices = (*BODY_PARAMETER_JOINTS, *range(len(BODY_JOINT_NAMES), len(joint_names)))
 
 argv = sys.argv[sys.argv.index("--") + 1 :]
 fbx_path, output_path = map(Path, argv)
-repo = Path(__file__).resolve().parents[1]
-base_path = repo / "src" / "mannequin" / "assets" / "convex0.npz"
 actual_sha256 = hashlib.sha256(fbx_path.read_bytes()).hexdigest()
 if actual_sha256 != SOURCE_SHA256:
     raise RuntimeError(f"Unexpected FBX SHA256: {actual_sha256}")
@@ -50,8 +112,6 @@ meshes = [obj for obj in bpy.context.scene.objects if obj.type == "MESH" and len
 
 # Blender imports the FBX as Z-up. mannequin-x and SMPL-X use Y-up.
 zup_to_yup = Matrix(((1.0, 0.0, 0.0, 0.0), (0.0, 0.0, 1.0, 0.0), (0.0, -1.0, 0.0, 0.0), (0.0, 0.0, 0.0, 1.0)))
-base = np.load(base_path, allow_pickle=False)
-joint_names = base["joint_names"].tolist()
 joint_index = {name: index for index, name in enumerate(joint_names)}
 
 source_joint_positions = np.zeros((len(joint_names), 3), dtype=np.float32)
@@ -149,35 +209,38 @@ skin_rigid_joint_indices = np.full(len(vertices), -1, dtype=np.int16)
 for component, anchor_name in zip(components, anchor_names, strict=True):
     skin_rigid_joint_indices[body_start + component] = joint_index[anchor_name]
 
-parents = base["parents"]
-source_offsets = np.zeros_like(base["local_offsets"])
-source_offsets[0] = base["local_offsets"][0]
+parents = np.asarray(parents, dtype=np.int64)
+source_offsets = np.zeros((len(joint_names), 3), dtype=np.float32)
+source_offsets[0] = source_joint_positions[0]
 for joint in range(1, len(parents)):
     source_offsets[joint] = source_joint_positions[joint] - source_joint_positions[parents[joint]]
 
-values = {key: base[key] for key in base.files}
-values.update(
-    local_offsets=source_offsets,
-    vertices=vertices,
-    faces=faces,
-    link_joint_indices=np.asarray([0], dtype=np.int64),
-    link_vertex_starts=np.asarray([0], dtype=np.int64),
-    link_vertex_counts=np.asarray([len(vertices)], dtype=np.int64),
-    link_face_starts=np.asarray([0], dtype=np.int64),
-    link_face_counts=np.asarray([len(faces)], dtype=np.int64),
-    link_geom_positions=np.zeros((1, 3), dtype=np.float32),
-    link_geom_rotations=np.eye(3, dtype=np.float32)[None],
-    link_names=np.asarray(["Pelvis_J00__wooden__body"]),
-    skin_joint_indices=skin_joint_indices,
-    skin_weights=skin_weights,
-    skin_source_joint_positions=source_joint_positions,
-    skin_part_names=np.asarray(part_names),
-    skin_part_vertex_starts=np.asarray(part_vertex_starts, dtype=np.int64),
-    skin_part_vertex_counts=np.asarray(part_vertex_counts, dtype=np.int64),
-    skin_part_face_starts=np.asarray(part_face_starts, dtype=np.int64),
-    skin_part_face_counts=np.asarray(part_face_counts, dtype=np.int64),
-    skin_rigid_joint_indices=skin_rigid_joint_indices,
-    source_sha256=np.asarray(SOURCE_SHA256),
-)
+values = {
+    "joint_names": np.asarray(joint_names),
+    "parents": parents,
+    "actuated_joint_indices": np.asarray(actuated_joint_indices, dtype=np.int64),
+    "local_offsets": source_offsets,
+    "rest_local_rotations": np.repeat(np.eye(3, dtype=np.float32)[None], len(joint_names), axis=0),
+    "vertices": vertices,
+    "faces": faces,
+    "link_joint_indices": np.asarray([0], dtype=np.int64),
+    "link_vertex_starts": np.asarray([0], dtype=np.int64),
+    "link_vertex_counts": np.asarray([len(vertices)], dtype=np.int64),
+    "link_face_starts": np.asarray([0], dtype=np.int64),
+    "link_face_counts": np.asarray([len(faces)], dtype=np.int64),
+    "link_geom_positions": np.zeros((1, 3), dtype=np.float32),
+    "link_geom_rotations": np.eye(3, dtype=np.float32)[None],
+    "link_names": np.asarray(["Pelvis_J00__wooden__body"]),
+    "skin_joint_indices": skin_joint_indices,
+    "skin_weights": skin_weights,
+    "skin_source_joint_positions": source_joint_positions,
+    "skin_part_names": np.asarray(part_names),
+    "skin_part_vertex_starts": np.asarray(part_vertex_starts, dtype=np.int64),
+    "skin_part_vertex_counts": np.asarray(part_vertex_counts, dtype=np.int64),
+    "skin_part_face_starts": np.asarray(part_face_starts, dtype=np.int64),
+    "skin_part_face_counts": np.asarray(part_face_counts, dtype=np.int64),
+    "skin_rigid_joint_indices": skin_rigid_joint_indices,
+    "source_sha256": np.asarray(SOURCE_SHA256),
+}
 np.savez_compressed(output_path, **values)
 print(f"WROTE {output_path} ({len(vertices)} vertices, {len(faces)} triangles)")
