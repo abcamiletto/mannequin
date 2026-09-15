@@ -12,7 +12,7 @@ from nanomanifold import SO3
 from mannequin import _identity, _io, _rigid
 
 Array = Any
-Kind = Literal["armor", "convex", "wooden"]
+Kind = Literal["convex", "wooden"]
 Lod = Literal[0, 1, 2]
 PoseParameters = Mapping[str, Array]
 
@@ -34,27 +34,28 @@ SMPLX_JOINT_NAMES = {
 class Mannequin:
     """One mannequin design and body shape.
 
-    Armor and convex mannequins use rigid links. Wooden mannequins use skinning.
-    Shape coefficients change bone lengths and reshape geometry along each bone.
+    Convex mannequins use rigid links. Wooden mannequins use skinning. Shape
+    coefficients change bone lengths and reshape geometry along each bone.
+    Unless ``flat_hand_mean`` is true, zero hand parameters use SMPL-X's relaxed
+    neutral hand mean.
     """
 
     def __init__(
         self,
-        kind: Kind = "armor",
+        kind: Kind = "wooden",
         *,
         lod: Lod | None = None,
         shape: Float[Array, "10"] | None = None,
+        flat_hand_mean: bool = False,
     ) -> None:
         if kind == "wooden" and lod is not None:
             raise ValueError(f"The {kind} mannequin has one resolution; omit lod.")
-        asset_lod = 0 if lod is None else lod
         self._kind = kind
-        self._weights = _io.load(asset_lod, kind=kind)
+        self._weights = _io.load(0 if lod is None else lod, kind=kind)
         self._bind_skin()
         self._template = _identity.build_template(self._weights)
         self._calibration = _io.load_calibration()
-        if self.skinned:
-            self._skeleton_weights = _io.load(2, kind="armor")
+        self._flat_hand_mean = flat_hand_mean
         self.reshape(np.zeros(SHAPE_COEFFICIENTS, np.float32) if shape is None else shape)
 
     @property
@@ -68,6 +69,10 @@ class Mannequin:
     @property
     def shape(self) -> Float[np.ndarray, "10"]:
         return self._shape.copy()
+
+    @property
+    def flat_hand_mean(self) -> bool:
+        return self._flat_hand_mean
 
     @property
     def faces(self) -> Int[Array, "F 3"]:
@@ -158,7 +163,7 @@ class Mannequin:
         zeros = np.zeros((*body_pose.shape[:-2], 3), dtype=body_pose.dtype)
         resolved_shape = self._shape_from_parameters(shape)
         local_offsets = _identity.prepare_skeleton(
-            self._skeleton_weights if self.skinned else self._weights,
+            self._weights,
             self._calibration,
             resolved_shape,
         )
@@ -212,7 +217,7 @@ class Mannequin:
             return _identity.prepare(self._weights, self._template, self._calibration, self._shape)
 
         local_offsets = _identity.prepare_skeleton(
-            self._skeleton_weights,
+            self._weights,
             self._calibration,
             self._shape,
         )
@@ -363,7 +368,8 @@ class Mannequin:
             raise ValueError(f"hand_pose must end in ({HAND_JOINTS}, 3), got {hand_pose.shape}")
         padding = np.zeros((*body_pose.shape[:-2], 2, 3), dtype=body_pose.dtype)
         ordered_body = np.take(np.concatenate((body_pose, padding), axis=-2), SMPLX_BODY_ORDER, axis=-2)
-        axis_angle = np.concatenate((ordered_body, hand_pose), axis=-2)
+        resolved_hand_pose = hand_pose if self._flat_hand_mean else hand_pose + self._calibration.hand_mean
+        axis_angle = np.concatenate((ordered_body, resolved_hand_pose), axis=-2)
         return SO3.convert(axis_angle, src="axis_angle", dst="rotmat", xp=np)
 
     def _rigid_vertices(self, joints: np.ndarray) -> np.ndarray:
@@ -377,7 +383,8 @@ class Mannequin:
             strict=True,
         ):
             vertices = local_vertices[start : start + count]
-            parts.append(np.einsum("...ij,vj->...vi", transform[..., :3, :3], vertices) + transform[..., None, :3, 3])
+            transformed = np.einsum("...ij,vj->...vi", transform[..., :3, :3], vertices)
+            parts.append(transformed + transform[..., None, :3, 3])
         return np.concatenate(parts, axis=-2)
 
     def _skin_vertices(

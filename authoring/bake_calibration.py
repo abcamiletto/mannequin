@@ -20,7 +20,7 @@ MODEL_PATH, OUT = sys.argv[1:]
 NUM_BETAS = 10
 SOLE_BAND = 0.05
 
-model = SMPLX(model_path=MODEL_PATH, flat_hand_mean=True)
+model = SMPLX(model_path=MODEL_PATH, flat_hand_mean=False)
 weights = io.load(0)
 renamed = {
     "Torso": "Spine1",
@@ -78,6 +78,7 @@ values = {
     "joint_dirs": joint_dirs.astype(np.float32),
     "sole_y_rest": y0[sole].astype(np.float32),
     "sole_y_dirs": sole_dirs.astype(np.float32),
+    "hand_mean": np.asarray(model._assets.hand_mean, np.float32).reshape(30, 3),
 }
 for name in regions:
     values[f"{name}_min_rest"] = bounds0[name][0].astype(np.float32)

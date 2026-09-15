@@ -23,7 +23,7 @@ MAX_INFLUENCES = 8
 argv = sys.argv[sys.argv.index("--") + 1 :]
 fbx_path, output_path = map(Path, argv)
 repo = Path(__file__).resolve().parents[1]
-base_path = repo / "src" / "mannequin" / "assets" / "lod0.npz"
+base_path = repo / "src" / "mannequin" / "assets" / "convex0.npz"
 actual_sha256 = hashlib.sha256(fbx_path.read_bytes()).hexdigest()
 if actual_sha256 != SOURCE_SHA256:
     raise RuntimeError(f"Unexpected FBX SHA256: {actual_sha256}")

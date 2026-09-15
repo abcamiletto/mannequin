@@ -1,12 +1,9 @@
 # SMPL-X Mannequin
 
-`mannequin-x` provides lightweight figures driven by SMPL-X body and hand
-rotations:
-
-- `armor` is the repo's segmented rigid mannequin, available in three LODs.
-- `convex` is a simulation-friendly human made only from rigid convex hulls,
-  available in three LODs.
-- `wooden` is a skinned wooden mannequin at its source resolution.
+`mannequin-x` provides two lightweight figures driven by SMPL-X body and hand
+rotations. `convex` is a simulation-friendly human made from rigid convex
+hulls in three LODs. `wooden`, the default, is a skinned mannequin at its
+source resolution.
 
 All designs accept pose dictionaries with the same fields as `body-models`.
 Ten SMPL-X shape coefficients resize their bones and geometry. The NumPy
@@ -27,7 +24,7 @@ from mannequin import Mannequin
 shape = np.zeros(10, dtype=np.float32)
 shape[0] = 1.5
 
-model = Mannequin("wooden", shape=shape)
+model = Mannequin("wooden", shape=shape, flat_hand_mean=False)
 pose = model.rest_pose()
 pose["body_pose"][17, 2] = 0.8
 
@@ -42,7 +39,7 @@ without renaming fields:
 ```python
 from body_models.smplx.numpy import SMPLX
 
-smplx = SMPLX(model_path="SMPLX_NEUTRAL.npz", flat_hand_mean=True)
+smplx = SMPLX(model_path="SMPLX_NEUTRAL.npz", flat_hand_mean=False)
 rest = smplx.get_rest_pose()
 
 joint_transforms = model.forward_skeleton(**rest)
@@ -50,6 +47,10 @@ joint_transforms = model.forward_skeleton(**rest)
 joint_transforms = model.joint_transforms(rest)
 vertices = model.vertices(rest)
 ```
+
+`flat_hand_mean` defaults to `False`, matching SMPL-X. In this mode, zero hand
+parameters produce the relaxed mean hand pose. Pass `flat_hand_mean=True` when
+using SMPL-X parameters created with the flat-hand convention.
 
 `forward_skeleton()` accepts the `body_pose`, `head_pose`, `hand_pose`,
 `pelvis_rotation`, `shape`, `expression`, `global_rotation`, and
@@ -61,8 +62,8 @@ wrists. It accepts but ignores `head_pose` and `expression` because neither
 mannequin has the corresponding joints or geometry.
 
 Create the convex model with `Mannequin("convex", lod=0)`. Its LODs contain 80,
-52, and 22 hulls respectively. Armor also supports LODs 0, 1, and 2. The wooden
-model has one resolution, so it does not accept `lod`.
+52, and 22 hulls respectively. The wooden model has one resolution, so it does
+not accept `lod`.
 
 `rest_pose()` returns a mutable dictionary with the `body-models` fields:
 
@@ -118,19 +119,11 @@ Run the live comparison against a local neutral SMPL-X model:
 uv run python examples/compare.py /path/to/SMPLX_NEUTRAL.npz
 ```
 
-The viewer shows armor, wooden, and full SMPL-X figures with matched motion,
+The viewer shows convex, wooden, and full SMPL-X figures with matched motion,
 random hand poses, shape controls, front and side views, a T-pose button, and a
 shared palette. The SMPL-X file remains external to the package.
 
-## three.js
-
-`authoring/export_glb.py` exports rigid armor as a nested GLB joint hierarchy.
-The root extras contain the SMPL-X body and hand parameter mapping. See
-[`examples/threejs.html`](examples/threejs.html).
-
 ## Assets
-
-The editable armor source is [`authoring/mannequin.blend`](authoring/mannequin.blend).
 
 `src/mannequin/assets/wooden.npz` retains its source vertices and skin weights,
 converts coordinates, triangulates faces, and maps 52 source bones onto this

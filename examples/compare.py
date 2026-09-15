@@ -80,15 +80,15 @@ args = parser.parse_args()
 
 server = viser.ViserServer(port=8080)
 server.scene.set_up_direction("+y")
-armor = Mannequin("armor", lod=1)
+convex = Mannequin("convex", lod=1)
 wooden = Mannequin("wooden")
-smplx = SMPLX(model_path=args.smplx_model, flat_hand_mean=True)
-armor_rest = armor.vertices(armor.rest_pose())
+smplx = SMPLX(model_path=args.smplx_model, flat_hand_mean=False)
+convex_rest = convex.vertices(convex.rest_pose())
 wooden_rest = wooden.vertices(wooden.rest_pose())
-smplx_pose = armor.rest_pose()
+smplx_pose = convex.rest_pose()
 smplx_rest = np.asarray(smplx.rest_vertices)
-floor_y = float(min(armor_rest[:, 1].min(), wooden_rest[:, 1].min(), smplx_rest[:, 1].min()))
-label_y = float(max(armor_rest[:, 1].max(), wooden_rest[:, 1].max(), smplx_rest[:, 1].max()) + 0.12)
+floor_y = float(min(convex_rest[:, 1].min(), wooden_rest[:, 1].min(), smplx_rest[:, 1].min()))
+label_y = float(max(convex_rest[:, 1].max(), wooden_rest[:, 1].max(), smplx_rest[:, 1].max()) + 0.12)
 
 server.scene.add_grid(
     "/floor",
@@ -100,12 +100,12 @@ server.scene.add_grid(
     position=(0.0, floor_y, 0.0),
 )
 
-armor_handle = add_to_scene(server.scene, "/armor", armor, palette="slate")
+convex_handle = add_to_scene(server.scene, "/convex", convex, palette="slate")
 wooden_handle = add_to_scene(server.scene, "/wooden", wooden, palette="slate")
 smplx_handle = SmplxHandle(server.scene, smplx, smplx_pose, "slate")
-armor_label = server.scene.add_label(
-    "/armor_label",
-    "Armor",
+convex_label = server.scene.add_label(
+    "/convex_label",
+    "Convex",
     position=(-2.4, label_y, 0.0),
     anchor="bottom-center",
 )
@@ -154,7 +154,7 @@ with server.gui.add_folder("Appearance"):
 FRONT_POSITIONS = ((-2.4, 0.0), (0.0, 0.0), (2.4, 0.0))
 SIDE_POSITIONS = ((0.0, -2.4), (0.0, 0.0), (0.0, 2.4))
 figures = (
-    (armor_handle, armor_label),
+    (convex_handle, convex_label),
     (smplx_handle, smplx_label),
     (wooden_handle, wooden_label),
 )
@@ -171,7 +171,7 @@ def apply_pose(phase: float) -> None:
     strength = float(pose_strength.value)
     swing = math.sin(angle) * strength
     bounce = math.sin(angle * 2.0) * strength
-    pose = armor.rest_pose()
+    pose = convex.rest_pose()
     pose["hand_pose"][:] = hand_pose
     body = pose["body_pose"]
     body[0, 0] += 0.35 * swing
